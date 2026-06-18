@@ -6,6 +6,13 @@ description = "Chaos MD TUI for distributed chaos testing"
 authors = ["Evgeny Varnakov"]
 publish = false
 
+[lib]
+path = "src/lib.rs"
+
+[[bin]]
+name = "chaos-md"
+path = "src/main.rs"
+
 [dependencies]
 ratatui     = "0.29"
 crossterm   = { version = "0.28", features = ["event-stream"] }

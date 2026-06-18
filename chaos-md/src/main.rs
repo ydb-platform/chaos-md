@@ -1,17 +1,4 @@
-// Подавляем «unused field» в state-структурах: эти поля задействуются в
-// будущих фичах (auto-restart, Finished-таймер, расширение CurrentEvent),
-// держим без скобок-плейсхолдеров.
 #![allow(dead_code)]
-
-mod ansi;
-mod app;
-mod catalog;
-mod queue;
-mod runner;
-mod state;
-mod theme;
-mod ui;
-mod watcher;
 
 use std::io::{self, stdout};
 use std::path::PathBuf;
@@ -20,7 +7,7 @@ use std::time::{Duration, Instant};
 use anyhow::{Context, Result};
 use chrono::Local;
 use clap::Parser;
-use crossterm::event::{Event, EventStream, KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
+use crossterm::event::{Event, EventStream, KeyEventKind};
 use crossterm::execute;
 use crossterm::terminal::{
     disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen,
@@ -32,13 +19,16 @@ use ratatui::text::{Line, Span};
 use ratatui::Terminal;
 use tokio::sync::mpsc;
 
-use crate::ansi::LogParser;
-use crate::app::{App, CheckDialog, CurrentEvent, Focus, RunnerStatus, SelectorItem};
-use crate::catalog::CATALOG;
-use crate::queue::{Phases, Step};
-use crate::runner::{describe, spawn_step, RunnerEvent, Running};
-use crate::theme as col;
-use crate::watcher::{TimelineLine, WatcherEvent};
+use chaos_md::ansi::LogParser;
+use chaos_md::app::{App, CheckDialog, CurrentEvent, RunnerStatus, SelectorItem};
+use chaos_md::catalog::CATALOG;
+use chaos_md::input::{self, KeyOutcome};
+use chaos_md::queue::{self, Phases, Step};
+use chaos_md::runner::{describe, spawn_step, RunnerEvent, Running};
+use chaos_md::state;
+use chaos_md::theme as col;
+use chaos_md::ui;
+use chaos_md::watcher::{self, TimelineLine, WatcherEvent};
 
 /// События от фоновой команды `./NN-test.sh -C`.
 enum CheckLine {
@@ -174,8 +164,8 @@ async fn event_loop<B: ratatui::backend::Backend>(
             maybe_evt = events.next() => {
                 if let Some(Ok(Event::Key(k))) = maybe_evt {
                     if k.kind == KeyEventKind::Press {
-                        let request_start = on_key(&mut app, k);
-                        if request_start {
+                        let outcome = input::on_key(&mut app, k);
+                        if outcome == KeyOutcome::StartQueue {
                             app.queue = queue::build(&app.selected, app.phases, app.time_wait_s);
                             if !app.queue.is_empty() {
                                 app.runner = RunnerStatus::Idle;
@@ -198,7 +188,17 @@ async fn event_loop<B: ratatui::backend::Backend>(
                 if step_done {
                     current_running = None;
                     current_runner_rx = None;
-                    advance_queue(&mut app, &mut current_running, &mut current_runner_rx, term)?;
+                    if app.stop_teardown_running {
+                        // Завершился teardown, запущенный по запросу пользователя
+                        app.stop_teardown_running = false;
+                        app.runner = RunnerStatus::Idle;
+                        app.queue.clear();
+                        app.finished_tests.clear();
+                        app.finished_tests.resize(app.selected.len(), false);
+                        push_local_log(&mut app, "[остановлено пользователем]".to_string());
+                    } else {
+                        advance_queue(&mut app, &mut current_running, &mut current_runner_rx, term)?;
+                    }
                 }
             }
 
@@ -221,18 +221,65 @@ async fn event_loop<B: ratatui::backend::Backend>(
             _ = tick.tick() => {
                 if app.stop_requested && app.is_running() {
                     app.stop_requested = false;
-                    if let Some(r) = &mut current_running {
-                        let _ = r.kill();
-                    }
-                    current_running = None;
-                    current_runner_rx = None;
-                    app.runner = RunnerStatus::Idle;
-                    app.finished_tests.clear();
-                    app.finished_tests.resize(app.selected.len(), false);
+                    request_stop(&mut app, &mut current_running, &mut current_runner_rx, term)?;
                 }
             }
         }
     }
+}
+
+/// Реализация запроса на остановку. Если у текущего шага есть `needs_teardown`,
+/// запускаем `-D` как новый шаг, ставим флаг `stop_teardown_running`.
+/// Иначе сразу Idle.
+fn request_stop<B: ratatui::backend::Backend>(
+    app: &mut App,
+    current_running: &mut Option<Running>,
+    current_runner_rx: &mut Option<mpsc::UnboundedReceiver<RunnerEvent>>,
+    term: &mut Terminal<B>,
+) -> Result<()> {
+    // Найдём, какой тест сейчас прогоняется (если есть). Запускаем -D для
+    // ЛЮБОГО Run-шага (а не только needs_teardown), потому что у каждого
+    // bash-теста -D идемпотентен и должен снимать локальные изменения,
+    // даже если основной цикл не оставил «висящий» хаос.
+    let teardown_idx: Option<usize> = if let RunnerStatus::Running { step_idx, .. } = &app.runner {
+        app.queue.get(*step_idx).and_then(|st| match st {
+            Step::Run { test_idx, .. } => Some(*test_idx),
+            Step::Teardown { test_idx } => Some(*test_idx),
+            Step::Pause { .. } => None,
+        })
+    } else { None };
+
+    // Прибиваем текущий процесс.
+    if let Some(r) = current_running.as_mut() {
+        let _ = r.kill();
+    }
+    *current_running = None;
+    *current_runner_rx = None;
+    app.log_current = None;
+    app.chaos_started_at = None;
+    app.current_event = None;
+
+    push_local_log(app, "[запрошена остановка]".to_string());
+
+    if let Some(idx) = teardown_idx {
+        // Запускаем teardown-шаг.
+        app.queue = vec![Step::Teardown { test_idx: idx }];
+        app.runner = RunnerStatus::Running {
+            step_idx: 0,
+            started_at: Instant::now(),
+            started_wall: Local::now(),
+        };
+        app.stop_teardown_running = true;
+        spawn_current(app, current_running, current_runner_rx, term)?;
+    } else {
+        // Нечего сворачивать — сразу Idle.
+        app.runner = RunnerStatus::Idle;
+        app.queue.clear();
+        app.finished_tests.clear();
+        app.finished_tests.resize(app.selected.len(), false);
+        push_local_log(app, "[остановлено пользователем]".to_string());
+    }
+    Ok(())
 }
 
 /// Выбрать recv() из current_runner_rx, либо вечно ждать.
@@ -249,250 +296,6 @@ async fn recv_check(rx: &mut Option<mpsc::UnboundedReceiver<CheckLine>>) -> Opti
     match rx {
         Some(r) => r.recv().await,
         None => std::future::pending::<Option<CheckLine>>().await,
-    }
-}
-
-// =============================================================================
-// Ввод
-// =============================================================================
-
-/// Возвращает true, если по результату обработки нужно стартовать очередь.
-fn on_key(app: &mut App, k: KeyEvent) -> bool {
-    // Диалоги открыты — поглощаем все клавиши.
-    if app.check_dialog.is_some() {
-        on_key_dialog(app, k);
-        return false;
-    }
-    if app.config_dialog_open {
-        on_key_config_dialog(app, k);
-        return false;
-    }
-
-    // Ctrl+C / q → выход (приоритет выше диалога).
-    if (k.code == KeyCode::Char('c') && k.modifiers.contains(KeyModifiers::CONTROL))
-        || k.code == KeyCode::Char('q')
-    {
-        if app.is_running() && !app.quit_pending {
-            app.quit_pending = true;
-            return false;
-        }
-        app.should_quit = true;
-        return false;
-    }
-    if app.quit_pending {
-        match k.code {
-            KeyCode::Char('y') | KeyCode::Char('Y') => app.should_quit = true,
-            _ => app.quit_pending = false,
-        }
-        return false;
-    }
-
-    // 'c' (без модификаторов) → открыть Check для выделенного теста.
-    if k.code == KeyCode::Char('c') && k.modifiers.is_empty() {
-        if let SelectorItem::Test(idx) = app.current_selector_item() {
-            app.pending_check = Some(idx);
-        }
-        return false;
-    }
-
-    // 'i' → открыть диалог конфигурации.
-    if k.code == KeyCode::Char('i') && k.modifiers.is_empty() {
-        app.config_dialog_open = true;
-        return false;
-    }
-
-    // 'K' → очистка логов и таймлайна.
-    if k.code == KeyCode::Char('K') && k.modifiers.is_empty() {
-        app.log_lines.clear();
-        app.log_current = None;
-        app.timeline_lines.clear();
-        return false;
-    }
-
-    // 'R' → полная перерисовка экрана.
-    if k.code == KeyCode::Char('R') && k.modifiers.is_empty() {
-        app.force_redraw = true;
-        return false;
-    }
-
-    // Ctrl+R → то же.
-    if k.code == KeyCode::Char('r') && k.modifiers.contains(KeyModifiers::CONTROL) {
-        app.force_redraw = true;
-        return false;
-    }
-
-    if k.code == KeyCode::Tab {
-        if app.focus == Focus::Selector {
-            if matches!(app.current_selector_item(), SelectorItem::Start) {
-                app.focus = Focus::Log;
-            } else {
-                let start_idx = SelectorItem::all().len() - 1;
-                app.selector_idx = start_idx;
-            }
-        } else {
-            match app.focus {
-                Focus::Log => { app.focus = Focus::Timeline; }
-                Focus::Timeline => {
-                    app.focus = Focus::Selector;
-                    app.selector_idx = 0;
-                }
-                Focus::Selector => { app.focus = Focus::Log; }
-            }
-        }
-        return false;
-    }
-
-    match app.focus {
-        Focus::Selector => on_key_selector(app, k),
-        Focus::Log => {
-            on_key_scroll(&mut app.log_scroll, k);
-            false
-        }
-        Focus::Timeline => {
-            on_key_scroll(&mut app.timeline_scroll, k);
-            false
-        }
-    }
-}
-
-fn on_key_dialog(app: &mut App, k: KeyEvent) {
-    match k.code {
-        KeyCode::Esc | KeyCode::Char('c') | KeyCode::Char('q') => {
-            app.check_dialog = None;
-        }
-        KeyCode::Up => {
-            if let Some(d) = &mut app.check_dialog {
-                d.scroll = d.scroll.saturating_sub(1);
-            }
-        }
-        KeyCode::Down => {
-            if let Some(d) = &mut app.check_dialog {
-                d.scroll = d.scroll.saturating_add(1);
-            }
-        }
-        KeyCode::PageUp => {
-            if let Some(d) = &mut app.check_dialog {
-                d.scroll = d.scroll.saturating_sub(20);
-            }
-        }
-        KeyCode::PageDown => {
-            if let Some(d) = &mut app.check_dialog {
-                d.scroll = d.scroll.saturating_add(20);
-            }
-        }
-        KeyCode::Home => {
-            if let Some(d) = &mut app.check_dialog {
-                d.scroll = 0;
-            }
-        }
-        KeyCode::End => {
-            if let Some(d) = &mut app.check_dialog {
-                d.scroll = usize::MAX / 2;
-            }
-        }
-        _ => {}
-    }
-}
-
-fn on_key_config_dialog(app: &mut App, k: KeyEvent) {
-    match k.code {
-        KeyCode::Esc | KeyCode::Char('i') | KeyCode::Char('q') => {
-            app.config_dialog_open = false;
-        }
-        _ => {}
-    }
-}
-
-fn on_key_selector(app: &mut App, k: KeyEvent) -> bool {
-    match k.code {
-        KeyCode::Up => app.selector_move(-1),
-        KeyCode::Down => app.selector_move(1),
-        KeyCode::Char(' ') => {
-            if matches!(app.current_selector_item(), SelectorItem::Start) {
-                if app.is_running() {
-                    app.stop_requested = true;
-                } else {
-                    return true;
-                }
-            } else {
-                toggle_current(app);
-                let _ = state::save(app);
-            }
-        }
-        KeyCode::Char('S') => {
-            if app.is_running() {
-                app.stop_requested = true;
-            } else {
-                return true;
-            }
-        }
-        KeyCode::Enter => {
-            if matches!(app.current_selector_item(), SelectorItem::Start) {
-                return true;
-            } else {
-                toggle_current(app);
-                let _ = state::save(app);
-            }
-        }
-        KeyCode::Backspace => match app.current_selector_item() {
-            SelectorItem::TimeTest => {
-                app.time_test_s /= 10;
-                let _ = state::save(app);
-            }
-            SelectorItem::TimeWait => {
-                app.time_wait_s /= 10;
-                let _ = state::save(app);
-            }
-            _ => {}
-        },
-        KeyCode::Char(c) if c.is_ascii_digit() => {
-            let d = c as u32 - '0' as u32;
-            let mut changed = false;
-            match app.current_selector_item() {
-                SelectorItem::TimeTest => {
-                    let n = app.time_test_s.saturating_mul(10).saturating_add(d);
-                    if n <= 100_000 {
-                        app.time_test_s = n;
-                        changed = true;
-                    }
-                }
-                SelectorItem::TimeWait => {
-                    let n = app.time_wait_s.saturating_mul(10).saturating_add(d);
-                    if n <= 100_000 {
-                        app.time_wait_s = n;
-                        changed = true;
-                    }
-                }
-                _ => {}
-            }
-            if changed {
-                let _ = state::save(app);
-            }
-        }
-        _ => {}
-    }
-    false
-}
-
-fn toggle_current(app: &mut App) {
-    match app.current_selector_item() {
-        SelectorItem::Test(idx) => app.selected[idx] = !app.selected[idx],
-        SelectorItem::PhaseNode => app.phases.node = !app.phases.node,
-        SelectorItem::PhaseDc => app.phases.dc = !app.phases.dc,
-        SelectorItem::DryRun => app.dry_run = !app.dry_run,
-        _ => {}
-    }
-}
-
-fn on_key_scroll(scroll: &mut usize, k: KeyEvent) {
-    match k.code {
-        KeyCode::PageUp => *scroll = scroll.saturating_add(10),
-        KeyCode::PageDown => *scroll = scroll.saturating_sub(10),
-        KeyCode::Up => *scroll = scroll.saturating_add(1),
-        KeyCode::Down => *scroll = scroll.saturating_sub(1),
-        KeyCode::Home => *scroll = usize::MAX,
-        KeyCode::End => *scroll = 0,
-        _ => {}
     }
 }
 
@@ -749,11 +552,11 @@ fn open_check_dialog(
 
 async fn run_headless(cli: &Cli, root: &PathBuf) -> Result<()> {
     use std::io::Write;
-    let mut selected = vec![false; catalog::CATALOG.len()];
+    let mut selected = vec![false; chaos_md::catalog::CATALOG.len()];
     if let Some(csv) = &cli.tests {
         for id in csv.split(',') {
             let id = id.trim();
-            if let Some(i) = catalog::find_by_id(id) {
+            if let Some(i) = chaos_md::catalog::find_by_id(id) {
                 selected[i] = true;
             } else {
                 eprintln!("Неизвестный test id: {id}");

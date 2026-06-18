@@ -2,9 +2,9 @@
 
 pub mod clock;
 pub mod config_dialog;
+pub mod confirm;
 pub mod dialog;
 pub mod log;
-pub mod progress;
 pub mod remaining_time;
 pub mod selector;
 pub mod status;
@@ -60,8 +60,10 @@ pub fn draw(f: &mut Frame, app: &App) {
     draw_menu_bar(f, app, menu_bar);
     draw_status_bar(f, app, status_bar);
 
-    // Диалоги — рендерим поверх всего остального.
-    if app.config_dialog_open {
+    // Диалоги — рендерим поверх всего остального. Приоритет: stop > config > check.
+    if app.stop_confirm_pending {
+        confirm::draw_stop_confirm(f);
+    } else if app.config_dialog_open {
         config_dialog::draw(f, app);
     } else {
         dialog::draw(f, app);
@@ -81,47 +83,109 @@ fn draw_menu_bar(f: &mut Frame, _app: &App, area: Rect) {
     f.render_widget(p, area);
 }
 
-fn draw_status_bar(f: &mut Frame, _app: &App, area: Rect) {
-    let style = Style::default()
-        .bg(crate::theme::STATUS_BG_DARK)
-        .fg(crate::theme::DIM);
+fn draw_status_bar(f: &mut Frame, app: &App, area: Rect) {
+    use crate::theme;
+    use ratatui::style::{Color, Modifier};
 
-    let parts = [
+    // Особый случай: ждём ответа «выйти?». Перекрашиваем весь статус-бар.
+    if app.quit_pending {
+        let line = ratatui::text::Line::from(vec![
+            Span::styled(
+                " Выйти из приложения? ",
+                Style::default()
+                    .bg(theme::ERR)
+                    .fg(Color::White)
+                    .add_modifier(Modifier::BOLD),
+            ),
+            Span::raw("  "),
+            Span::styled(
+                " y ",
+                Style::default()
+                    .bg(theme::OK)
+                    .fg(Color::Black)
+                    .add_modifier(Modifier::BOLD),
+            ),
+            Span::raw(" подтвердить    "),
+            Span::styled(
+                " Esc / любая ",
+                Style::default()
+                    .bg(theme::CYBER_GRAY)
+                    .fg(Color::White)
+                    .add_modifier(Modifier::BOLD),
+            ),
+            Span::raw(" отмена"),
+        ]);
+        let p = Paragraph::new(line).style(
+            Style::default()
+                .bg(theme::STATUS_BG_DARK)
+                .fg(Color::White),
+        );
+        f.render_widget(p, area);
+        return;
+    }
+
+    let style = Style::default()
+        .bg(theme::STATUS_BG_DARK)
+        .fg(theme::DIM);
+
+    // Подсказки зависят от состояния.
+    let mut parts: Vec<(&str, &str)> = vec![
         ("Tab", "Фокус"),
-        ("c", "Проверка"),
-        ("i", "Конфиг"),
-        ("S", "Запустить хаос!"),
+        ("↑↓", "Навигация"),
     ];
+    match app.focus {
+        crate::app::Focus::Selector => {
+            parts.push(("Space/Enter", "Выбрать"));
+        }
+        crate::app::Focus::Log | crate::app::Focus::Timeline => {
+            parts.push(("PgUp/PgDn", "Скролл"));
+        }
+    }
+    parts.push(("c", "Проверка"));
+    parts.push(("i", "Конфиг"));
+    if app.is_running() {
+        parts.push(("S", "Стоп!"));
+    } else {
+        parts.push(("S", "Запуск"));
+    }
+    parts.push(("q", "Выход"));
 
     let mut left_spans = Vec::new();
     for (k, v) in parts {
-        left_spans.push(Span::styled(format!(" {k} "), Style::default().bg(crate::theme::CYBER_GRAY).fg(crate::theme::OK).add_modifier(ratatui::style::Modifier::BOLD)));
-        left_spans.push(Span::styled(format!(" {v}  "), Style::default().bg(crate::theme::STATUS_BG_DARK).fg(ratatui::style::Color::White)));
+        left_spans.push(Span::styled(
+            format!(" {k} "),
+            Style::default()
+                .bg(theme::CYBER_GRAY)
+                .fg(theme::OK)
+                .add_modifier(Modifier::BOLD),
+        ));
+        left_spans.push(Span::styled(
+            format!(" {v}  "),
+            Style::default()
+                .bg(theme::STATUS_BG_DARK)
+                .fg(Color::White),
+        ));
     }
 
     let right_text = " YDB · 2026 ";
-
     let right_style = Style::default()
-        .bg(crate::theme::STATUS_BG_DARK)
-        .fg(crate::theme::DIM)
-        .add_modifier(ratatui::style::Modifier::BOLD);
+        .bg(theme::STATUS_BG_DARK)
+        .fg(theme::DIM)
+        .add_modifier(Modifier::BOLD);
     let right_p = Paragraph::new(ratatui::text::Line::from(right_text))
         .style(right_style)
         .alignment(ratatui::layout::Alignment::Right);
-    
-    // Рендерим левую часть
-    let left_p = Paragraph::new(ratatui::text::Line::from(left_spans))
-        .style(style);
-    
-    // Разделяем область на левую и правую части
+
+    let left_p = Paragraph::new(ratatui::text::Line::from(left_spans)).style(style);
+
     let layout = Layout::default()
         .direction(ratatui::layout::Direction::Horizontal)
         .constraints([
-            ratatui::layout::Constraint::Min(0),  // левая часть растягивается
-            ratatui::layout::Constraint::Length(right_text.len() as u16),  // правая часть фиксированная
+            ratatui::layout::Constraint::Min(0),
+            ratatui::layout::Constraint::Length(right_text.len() as u16),
         ])
         .split(area);
-    
+
     f.render_widget(left_p, layout[0]);
     f.render_widget(right_p, layout[1]);
 }

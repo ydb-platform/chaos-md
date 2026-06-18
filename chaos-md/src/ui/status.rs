@@ -39,7 +39,15 @@ pub fn draw(f: &mut Frame, app: &App, area: Rect) {
         RunnerStatus::Running { step_idx, .. } => {
             let total = app.queue.len();
             let pos = step_idx + 1;
-            let step = &app.queue[*step_idx];
+            let Some(step) = app.queue.get(*step_idx) else {
+                lines.push(Line::from(Span::styled(
+                    "(пустая очередь)",
+                    Style::default().fg(theme::DIM),
+                )));
+                let p = Paragraph::new(lines);
+                f.render_widget(p, inner);
+                return;
+            };
 
             lines.push(Line::from(Span::styled(
                 format!("[{}/{}]", pos, total),

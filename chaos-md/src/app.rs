@@ -43,6 +43,56 @@ impl SelectorItem {
         v.push(SelectorItem::Start);
         v
     }
+
+    /// К какой функциональной группе относится итем.
+    pub fn group(self) -> SelectorGroup {
+        match self {
+            SelectorItem::Test(_)
+            | SelectorItem::PhaseNode
+            | SelectorItem::PhaseDc
+            | SelectorItem::DryRun => SelectorGroup::TestList,
+            SelectorItem::TimeTest | SelectorItem::TimeWait => SelectorGroup::TimeFields,
+            SelectorItem::Start => SelectorGroup::StartButton,
+        }
+    }
+}
+
+/// Подгруппа внутри панели Selector — отдельная точка фокуса Tab.
+/// Внутри группы навигация ↑/↓; Tab переключает на следующую группу.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SelectorGroup {
+    /// Список тестов + фазы + dry-run — всё, что переключается Space.
+    TestList,
+    /// Поля ввода времени и паузы.
+    TimeFields,
+    /// Кнопка Запуск/Стоп.
+    StartButton,
+}
+
+impl SelectorGroup {
+    /// Индекс первого итема этой группы в `SelectorItem::all()`.
+    pub fn first_idx(self) -> usize {
+        SelectorItem::all()
+            .iter()
+            .position(|i| i.group() == self)
+            .expect("group must contain at least one item")
+    }
+
+    /// Индекс последнего итема этой группы.
+    pub fn last_idx(self) -> usize {
+        SelectorItem::all()
+            .iter()
+            .rposition(|i| i.group() == self)
+            .expect("group must contain at least one item")
+    }
+
+    pub fn next(self) -> Option<SelectorGroup> {
+        match self {
+            SelectorGroup::TestList => Some(SelectorGroup::TimeFields),
+            SelectorGroup::TimeFields => Some(SelectorGroup::StartButton),
+            SelectorGroup::StartButton => None,
+        }
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -83,6 +133,9 @@ pub struct App {
     pub time_test_s: u32,
     pub time_wait_s: u32,
     pub selector_idx: usize, // индекс в SelectorItem::all()
+    pub selector_group: SelectorGroup, // подгруппа Selector (Tab-стоп)
+    /// «Свежий» вход в поле — первая цифра заменит значение, дальше дополняет.
+    pub time_field_pristine: bool,
 
     // фокус
     pub focus: Focus,
@@ -127,6 +180,10 @@ pub struct App {
     pub chaos_started_at: Option<Instant>,
     pub force_redraw: bool,
     pub stop_requested: bool,
+    /// Открыто окошко подтверждения остановки.
+    pub stop_confirm_pending: bool,
+    /// Идёт teardown по запросу пользователя — следующий Exited переводит в Idle.
+    pub stop_teardown_running: bool,
 
     // индексы завершённых тестов (для отображения галок)
     pub finished_tests: Vec<bool>,
@@ -146,6 +203,8 @@ impl App {
             time_test_s: 1200,
             time_wait_s: 600,
             selector_idx: 0,
+            selector_group: SelectorGroup::TestList,
+            time_field_pristine: true,
             focus: Focus::Selector,
             log_lines: VecDeque::new(),
             log_current: None,
@@ -167,6 +226,8 @@ impl App {
             chaos_started_at: None,
             force_redraw: false,
             stop_requested: false,
+            stop_confirm_pending: false,
+            stop_teardown_running: false,
             finished_tests: vec![false; CATALOG.len()],
         }
     }
@@ -175,12 +236,31 @@ impl App {
         SelectorItem::all()[self.selector_idx]
     }
 
+    /// Передвинуть курсор в селекторе с учётом текущей группы. Курсор не
+    /// «выпрыгивает» из группы — для перехода к следующей группе нужно Tab.
     pub fn selector_move(&mut self, delta: isize) {
-        let n = SelectorItem::all().len() as isize;
-        let mut i = self.selector_idx as isize + delta;
-        if i < 0 { i = 0; }
-        if i >= n { i = n - 1; }
-        self.selector_idx = i as usize;
+        let all = SelectorItem::all();
+        let new = self.selector_idx as isize + delta;
+        if new < 0 || new >= all.len() as isize {
+            return;
+        }
+        let new_idx = new as usize;
+        if all[new_idx].group() != self.selector_group {
+            return;
+        }
+        self.selector_idx = new_idx;
+        if self.selector_group == SelectorGroup::TimeFields {
+            self.time_field_pristine = true;
+        }
+    }
+
+    /// Сделать активной указанную группу и поставить курсор на её первый итем.
+    pub fn enter_selector_group(&mut self, group: SelectorGroup) {
+        self.selector_group = group;
+        self.selector_idx = group.first_idx();
+        if group == SelectorGroup::TimeFields {
+            self.time_field_pristine = true;
+        }
     }
 
     /// Текущий running step, если есть.
