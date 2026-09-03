@@ -52,6 +52,7 @@ $(basename "$0") — install VictoriaMetrics (single) on ${MON_HOST}.
   VM_DATA_DIR=${VM_DATA_DIR}
   VM_PORT=${VM_PORT}
   VM_RETENTION=${VM_RETENTION}
+  VM_SEARCH_LATENCY_OFFSET=${VM_SEARCH_LATENCY_OFFSET:-30s}
   Cluster hosts (${#CLUSTER_HOSTS[@]}): ${CLUSTER_HOSTS[*]}
     YDB_MON_PORTS:   ${YDB_MON_PORTS}
     YDB_MON_PD_PORT: ${YDB_MON_PD_PORT} (порт мониторинга узла хранения, pdisks/vdisks)
@@ -85,7 +86,7 @@ if [[ "${MODE_CHECK}" == "true" ]]; then
 fi
 
 log_section "Установка VictoriaMetrics на ${MON_HOST}"
-log "Образ: ${VICTORIA_DOCKER_IMAGE}, retention: ${VM_RETENTION}, port: ${VM_PORT}"
+log "Образ: ${VICTORIA_DOCKER_IMAGE}, retention: ${VM_RETENTION}, port: ${VM_PORT}, search latency: ${VM_SEARCH_LATENCY_OFFSET:-30s}"
 log "Хосты (${#CLUSTER_HOSTS[@]}): ${CLUSTER_HOSTS[*]}"
 log "YDB mon: YDB_MON_PORTS=${YDB_MON_PORTS}, pdisks/vdisks: YDB_MON_PD_PORT=${YDB_MON_PD_PORT}"
 
@@ -178,6 +179,7 @@ run_cmd "docker run -d --name vm --restart unless-stopped \
     -storageDataPath=/victoria-metrics-data \
     -httpListenAddr=:${VM_PORT} \
     -retentionPeriod=${VM_RETENTION} \
+    -search.latencyOffset=${VM_SEARCH_LATENCY_OFFSET:-30s} \
     -promscrape.config=/etc/scrape.yml"
 
 if [[ "${CHAOS_DRY_RUN}" != "true" ]]; then
