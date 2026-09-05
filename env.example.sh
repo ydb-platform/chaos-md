@@ -124,6 +124,8 @@ CHAOS_DISK_RESTART_STORAGE="${CHAOS_DISK_RESTART_STORAGE:-true}"
 DEFAULT_YDBD_BIN="/opt/ydb/bin/ydbd"
 
 SSH_OPTS=(-o StrictHostKeyChecking=no -o LogLevel=ERROR -o BatchMode=yes)
+# Жёсткий предел одного короткого SSH-вызова управления dynamic-сервисом.
+DYNAMIC_NODE_COMMAND_TIMEOUT_SECONDS=20
 
 GRAFANA_URL="${GRAFANA_URL:-https://grafana.example.invalid/}"
 GRAFANA_TOKEN="${GRAFANA_TOKEN:-}"

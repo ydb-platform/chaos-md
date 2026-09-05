@@ -27,6 +27,8 @@ EOF
 chaos_usage_examples() {
     cat <<EOF
   $(basename "$0") -1 -t 600 -d vdb
+  $(basename "$0") -1 --hold -t 600 -d vdb
+  $(basename "$0") -1 -D -d vdb
   $(basename "$0") -1 -t 600 --no-restart
   $(basename "$0") -D
   $(basename "$0") -C
@@ -74,6 +76,11 @@ if [[ "${RESTART_STORAGE}" == true ]]; then
     nemesis_proc_ydbd_restart "${NODE_HOST}"
 fi
 log_tl "CHAOS_START" "disk fail  scope=node  host=${NODE_HOST}  device=${DEVICE}  timeout=${TIMEOUT}s"
+
+if [[ "${MODE_HOLD}" == true ]]; then
+    log "Отказ диска оставлен активным; снимите его отдельным вызовом с -D"
+    exit 0
+fi
 
 log_wait_sec "${TIMEOUT}"
 chaos_wait_with_timer "${TIMEOUT}" "disk fail  ${NODE_HOST}"

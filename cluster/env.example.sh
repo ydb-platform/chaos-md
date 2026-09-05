@@ -11,3 +11,5 @@ DYNAMIC_NODE_HOSTS=(
 # Только dynamic/tenant service. Storage service указывать нельзя.
 YDBD_DYNAMIC_SERVICE="ydbd-database.service"
 DYNAMIC_NODE_WAIT_SECONDS=90
+# Жёсткий предел одного SSH-вызова start/stop/is-active.
+DYNAMIC_NODE_COMMAND_TIMEOUT_SECONDS=20

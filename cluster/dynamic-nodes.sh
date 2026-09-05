@@ -17,6 +17,7 @@ source "${REPO_ROOT}/lib/grafana.sh"
 COMMAND="${1:-}"
 COUNT="${2:-}"
 WAIT_SECONDS="${DYNAMIC_NODE_WAIT_SECONDS:-60}"
+COMMAND_TIMEOUT="${DYNAMIC_NODE_COMMAND_TIMEOUT_SECONDS:-20}"
 CHAOS_DRY_RUN="${CHAOS_DRY_RUN:-false}"
 
 usage() {
@@ -51,18 +52,42 @@ done
 declare -p DYNAMIC_NODE_HOSTS >/dev/null 2>&1 || { echo "DYNAMIC_NODE_HOSTS не задан" >&2; exit 2; }
 [[ ${#DYNAMIC_NODE_HOSTS[@]} -gt 0 ]] || { echo "DYNAMIC_NODE_HOSTS пуст" >&2; exit 2; }
 [[ "${WAIT_SECONDS}" =~ ^[0-9]+$ ]] || { echo "--wait должен быть числом" >&2; exit 2; }
+[[ "${COMMAND_TIMEOUT}" =~ ^[1-9][0-9]*$ ]] || {
+    echo "DYNAMIC_NODE_COMMAND_TIMEOUT_SECONDS должен быть положительным числом" >&2
+    exit 2
+}
 
 node_active() {
-    ssh_run "$1" sudo systemctl is-active --quiet "${YDBD_DYNAMIC_SERVICE}"
+    local host="$1" rc=0
+    ssh_run_timeout "${COMMAND_TIMEOUT}" "${host}" \
+        sudo systemctl is-active --quiet "${YDBD_DYNAMIC_SERVICE}" || rc=$?
+    case "${rc}" in
+        0) return 0 ;;
+        3) return 1 ;;
+        *) echo "Не удалось определить состояние ${host}: rc=${rc}" >&2; return 2 ;;
+    esac
+}
+
+node_service() {
+    local host="$1" action="$2"
+    ssh_run_timeout "${COMMAND_TIMEOUT}" "${host}" \
+        sudo systemctl "${action}" --no-block "${YDBD_DYNAMIC_SERVICE}"
 }
 
 status() {
-    local host state active=0
+    local host state rc active=0 unknown=0
     for host in "${DYNAMIC_NODE_HOSTS[@]}"; do
-        if node_active "${host}"; then state=ACTIVE; active=$((active + 1)); else state=STOPPED; fi
+        if node_active "${host}"; then
+            state=ACTIVE
+            active=$((active + 1))
+        else
+            rc=$?
+            if (( rc == 1 )); then state=STOPPED; else state=UNKNOWN; unknown=$((unknown + 1)); fi
+        fi
         printf '%-36s %s\n' "${host}" "${state}"
     done
     echo "active dynamic nodes: ${active}/${#DYNAMIC_NODE_HOSTS[@]}"
+    (( unknown == 0 ))
 }
 
 annotate() {
@@ -87,13 +112,23 @@ fi
 # Сначала запускаем все целевые процессы. Только после проверки останавливаем
 # лишние: это не создаёт искусственного окна без вычислительных узлов.
 for ((i=0; i<COUNT; i++)); do
-    ssh_run "${DYNAMIC_NODE_HOSTS[i]}" sudo systemctl start "${YDBD_DYNAMIC_SERVICE}"
+    if [[ "${CHAOS_DRY_RUN}" == true ]]; then
+        node_service "${DYNAMIC_NODE_HOSTS[i]}" start
+    elif node_active "${DYNAMIC_NODE_HOSTS[i]}"; then
+        :
+    else
+        rc=$?
+        (( rc == 1 )) || exit 1
+        node_service "${DYNAMIC_NODE_HOSTS[i]}" start
+    fi
 done
 
 if [[ "${CHAOS_DRY_RUN}" != true ]]; then
     deadline=$(( $(date +%s) + WAIT_SECONDS ))
     for ((i=0; i<COUNT; i++)); do
         until node_active "${DYNAMIC_NODE_HOSTS[i]}"; do
+            rc=$?
+            (( rc == 1 )) || exit 1
             (( $(date +%s) < deadline )) || {
                 echo "Узел ${DYNAMIC_NODE_HOSTS[i]} не запустился за ${WAIT_SECONDS}s" >&2
                 exit 1
@@ -104,8 +139,35 @@ if [[ "${CHAOS_DRY_RUN}" != true ]]; then
 fi
 
 for ((i=COUNT; i<${#DYNAMIC_NODE_HOSTS[@]}; i++)); do
-    ssh_run "${DYNAMIC_NODE_HOSTS[i]}" sudo systemctl stop "${YDBD_DYNAMIC_SERVICE}"
+    if [[ "${CHAOS_DRY_RUN}" == true ]]; then
+        node_service "${DYNAMIC_NODE_HOSTS[i]}" stop
+    elif node_active "${DYNAMIC_NODE_HOSTS[i]}"; then
+        node_service "${DYNAMIC_NODE_HOSTS[i]}" stop
+    else
+        rc=$?
+        (( rc == 1 )) || exit 1
+    fi
 done
+
+if [[ "${CHAOS_DRY_RUN}" != true ]]; then
+    deadline=$(( $(date +%s) + WAIT_SECONDS ))
+    for ((i=COUNT; i<${#DYNAMIC_NODE_HOSTS[@]}; i++)); do
+        while true; do
+            if node_active "${DYNAMIC_NODE_HOSTS[i]}"; then
+                (( $(date +%s) < deadline )) || {
+                    echo "Узел ${DYNAMIC_NODE_HOSTS[i]} не остановился за ${WAIT_SECONDS}s" >&2
+                    exit 1
+                }
+                sleep 2
+                continue
+            else
+                rc=$?
+                (( rc == 1 )) && break
+                exit 1
+            fi
+        done
+    done
+fi
 
 if [[ "${CHAOS_DRY_RUN}" != true ]]; then
     annotate "dynamic nodes = ${COUNT}"

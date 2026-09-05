@@ -32,6 +32,25 @@ ssh_run() {
     ssh "${SSH_OPTS[@]}" "${host}" "$@"
 }
 
+# Run a short control-plane command with a hard client-side deadline. The
+# regular ssh_run remains unchanged for long-running commands and backward
+# compatibility.
+ssh_run_timeout() {
+    local seconds="$1" host="$2" ssh_binary
+    shift 2
+    [[ "${seconds}" =~ ^[1-9][0-9]*$ ]] || {
+        echo "ssh_run_timeout: timeout must be a positive integer" >&2
+        return 2
+    }
+    chaos_term_remote_cmd "ssh ${host}  $*  # timeout ${seconds}s"
+    if [[ "${CHAOS_DRY_RUN:-false}" == "true" ]]; then
+        return 0
+    fi
+    ssh_binary="$(type -P ssh)"
+    [[ -n "${ssh_binary}" ]] || { echo "ssh binary not found" >&2; return 127; }
+    timeout --foreground "${seconds}s" "${ssh_binary}" "${SSH_OPTS[@]}" "${host}" "$@"
+}
+
 # Запустить heredoc-скрипт на удалённом хосте через bash -s.
 # Использование: ssh_run_script <host> <описание> <<'REMOTE'
 #   ... тело скрипта ...

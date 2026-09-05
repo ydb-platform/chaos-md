@@ -33,6 +33,11 @@ chaos_run_window() {
     "${apply_fn}" "${TARGET_HOSTS[@]}"
     log_tl "CHAOS_START" "${short}  scope=${SCOPE_LABEL}  hosts=${#TARGET_HOSTS[@]}  timeout=${TIMEOUT}s"
 
+    if [[ "${MODE_HOLD:-false}" == true ]]; then
+        log "Хаос оставлен активным; снимите его отдельным вызовом с -D"
+        return 0
+    fi
+
     log_wait_sec "${TIMEOUT}"
     chaos_wait_with_timer "${TIMEOUT}" "${short}  ${SCOPE_LABEL}=${#TARGET_HOSTS[@]}h"
 
@@ -47,6 +52,11 @@ chaos_run_window_no_teardown() {
 
     "${apply_fn}" "${TARGET_HOSTS[@]}"
     log_tl "CHAOS_START" "${short}  scope=${SCOPE_LABEL}  hosts=${#TARGET_HOSTS[@]}  timeout=${TIMEOUT}s"
+
+    if [[ "${MODE_HOLD:-false}" == true ]]; then
+        log "Хаос оставлен активным; снимите его отдельным вызовом с -D"
+        return 0
+    fi
 
     log_wait_sec "${TIMEOUT}"
     chaos_wait_with_timer "${TIMEOUT}" "${short}  ${SCOPE_LABEL}=${#TARGET_HOSTS[@]}h"

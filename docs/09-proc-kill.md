@@ -2,29 +2,38 @@
 
 ## Справка (`./09-proc-kill.sh -h`)
 
-**`-1`** (одна нода) или **`-4`** (весь основной ДЦ). Ключи: `-t`, `-r`, `-C`, `-D`.
+**`-1`** (одна нода) или **`-4`** (весь основной ДЦ). Ключи: `-t`,
+`--hold`, `-r`, `-C`, `-D`.
 
 ```bash
 ./09-proc-kill.sh -1 -t 600
+./09-proc-kill.sh -1 --hold -t 600       # удерживать отказ до отдельного -D
+./09-proc-kill.sh -1 -D
 ./09-proc-kill.sh -4 -t 600
 ./09-proc-kill.sh -1 -t 600 -r          # после паузы — явный restart storage
-./09-proc-kill.sh -D                      # аварийный restart storage
+./09-proc-kill.sh -D                      # аварийный start storage + tenant
 ```
 
 ## Описание
 
 Отправляет **SIGKILL** всем процессам, совпадающим с путём бинарника **`DEFAULT_YDBD_BIN`** (по умолчанию `/opt/ydb/bin/ydbd`). Процессы завершаются немедленно; systemd может поднять сервисы сам.
 
-После SIGKILL скрипт **ждёт `-t` секунд** (наблюдение). Опция **`-r`** — по окончании паузы явный `systemctl restart` storage на затронутых хостах. Без `-r` восстановление — только через systemd или вручную.
+После SIGKILL скрипт **ждёт `-t` секунд** (наблюдение). Опция **`-r`** — по окончании паузы явный `systemctl restart` storage на затронутых хостах. Без `-r` unit с `Restart=always` может восстановить процесс автоматически.
 
-**`-D`** не «отменяет» kill — это **restart storage** на выбранных хостах (аварийное восстановление).
+С `--hold` скрипт выполняет SIGKILL, затем останавливает настроенные storage- и
+tenant-unit. Это подавляет `Restart=always`: отказ остаётся активным, а скрипт
+возвращает управление. Восстановление выполняется отдельным `-D`.
+
+**`-D`** запускает storage-, затем tenant-unit на выбранных хостах и закрывает
+окно хаоса. Команда идемпотентна и подходит для аварийного восстановления.
 
 ## Команды вручную
 
 ```bash
 pgrep -a -f /opt/ydb/bin/ydbd
 sudo kill -KILL $(pgrep -f /opt/ydb/bin/ydbd)
-systemctl restart ydbd-storage.service    # имя из YDBD_STORAGE_SERVICE в env.sh
+systemctl start ydbd-storage.service      # сначала storage
+systemctl start ydbd-database-a.service   # затем tenant-unit из env.sh
 ```
 
 ## Параметры
@@ -35,7 +44,7 @@ systemctl restart ydbd-storage.service    # имя из YDBD_STORAGE_SERVICE в 
 | Явный restart storage | `-r` | выкл. |
 | Область | `-1` / `-4` | один обязателен |
 | Проверка | `-C` [HOST] | — |
-| Restart (аварийный) | `-D` | — |
+| Восстановить storage + tenant | `-D` | — |
 
 ## Что наблюдать
 

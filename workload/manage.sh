@@ -294,10 +294,14 @@ cmd_action() {
         echo "action требует имя действия adapter" >&2
         exit 2
     }
-    local action_name="${EXTRA_ARGS[0]}" action_text
+    local action_name="${EXTRA_ARGS[0]}" action_text annotate_action=true
     action_text="workload ${TYPE}: ${EXTRA_ARGS[*]}"
     adapter action "${EXTRA_ARGS[@]}"
-    if [[ "${DRY_RUN}" != true ]]; then
+    # `partitions` is the search adapter's read-only status query. Recording it
+    # as a control action used to create a vertical Grafana marker on every
+    # observer/poll iteration and hid the meaningful profile and split events.
+    [[ "${action_name}" != partitions ]] || annotate_action=false
+    if [[ "${DRY_RUN}" != true && "${annotate_action}" == true ]]; then
         workload_event "WORKLOAD_ACTION" "${action_text}"
         if [[ "${ANNOTATIONS}" == true ]]; then
             local marker="workload-action-${TYPE}"

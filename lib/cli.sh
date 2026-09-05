@@ -8,6 +8,7 @@
 #   -t / --time SEC      длительность фазы хаоса
 #   -H / --host HOST     переопределить хост для -1
 #   -D / --teardown      снять хаос
+#   --hold               применить хаос и вернуть управление без локального ожидания
 #   -C / --check [HOST]  показать состояние
 #   -h / --help          справка
 #
@@ -22,6 +23,7 @@ SCOPE_DC=false
 SCOPE_DC_ALT=false
 MODE_TEARDOWN=false
 MODE_CHECK=false
+MODE_HOLD=false
 CHECK_HOST=""
 NODE_HOST="${SINGLE_HOST:-}"
 TIMEOUT="${DEFAULT_CHAOS_TIMEOUT:-1200}"
@@ -38,6 +40,7 @@ chaos_parse_common() {
             -t|--time)     TIMEOUT="$2";      shift 2 ;;
             -H|--host)     NODE_HOST="$2";    shift 2 ;;
             -D|--teardown) MODE_TEARDOWN=true; shift ;;
+            --hold)         MODE_HOLD=true;     shift ;;
             -N|--dry-run)  CHAOS_DRY_RUN=true; shift ;;
             -C|--check)
                 MODE_CHECK=true
@@ -98,6 +101,7 @@ EOF
   -t, --time SEC        Длительность фазы хаоса, с (по умолчанию: ${DEFAULT_CHAOS_TIMEOUT:-1200})
   -H, --host HOST       Переопределить хост для -1
   -D, --teardown        Снять хаос (откат). Без -1/-4/-A обрабатываются все хосты из env: NODE_HOST (-H), SINGLE_HOST, DC_HOSTS, DC_ALT_HOSTS и CLUSTER_HOSTS (дедуп).
+  --hold                Применить хаос и сразу вернуть управление. Снять отдельным вызовом -D; удалённый safety-таймер -t остаётся активным, если немезис его поддерживает.
   -C, --check [HOST]    Показать состояние (без HOST — ${SINGLE_HOST:-?})
   -N, --dry-run         Не выполнять ssh/scp; показать только что бы запустилось
 EOF

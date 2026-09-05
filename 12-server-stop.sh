@@ -22,6 +22,8 @@ EOF
 chaos_usage_examples() {
     cat <<EOF
   $(basename "$0") -1 -t 600
+  $(basename "$0") -1 --hold -t 600
+  $(basename "$0") -1 -D
   $(basename "$0") -4 -t 600
   $(basename "$0") -A -t 600
   $(basename "$0") -C

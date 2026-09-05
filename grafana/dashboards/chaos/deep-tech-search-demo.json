@@ -1,5 +1,5 @@
 {
-  "version": 4,
+  "version": 5,
   "schemaVersion": 38,
   "time": {
     "from": "now-30m",
@@ -80,7 +80,8 @@
         "pluginId": "prometheus",
         "query": "prometheus",
         "label": "Datasource",
-        "current": {}
+        "current": {},
+        "hide": 2
       },
       {
         "name": "application",
@@ -95,7 +96,8 @@
         "sort": 1,
         "includeAll": true,
         "allValue": ".*",
-        "current": {}
+        "current": {},
+        "hide": 2
       },
       {
         "name": "database",
@@ -108,7 +110,8 @@
         "label": "Database",
         "refresh": 2,
         "sort": 1,
-        "current": {}
+        "current": {},
+        "hide": 2
       }
     ]
   },
@@ -616,121 +619,6 @@
         "type": "prometheus",
         "uid": "$ds"
       },
-      "description": "Displays the uptime of each node since its startup. Helps track restarts and identify unstable nodes.",
-      "fieldConfig": {
-        "defaults": {
-          "color": {
-            "mode": "palette-classic"
-          },
-          "custom": {
-            "drawStyle": "line",
-            "lineInterpolation": "stepAfter",
-            "lineWidth": 1,
-            "fillOpacity": 0,
-            "showPoints": "auto",
-            "pointSize": 3,
-            "spanNulls": false,
-            "gradientMode": "none",
-            "stacking": {
-              "mode": "none",
-              "group": "A"
-            },
-            "hideFrom": {
-              "legend": false,
-              "tooltip": false,
-              "viz": false
-            },
-            "thresholdsStyle": {
-              "mode": "off"
-            },
-            "scaleDistribution": {
-              "type": "linear"
-            },
-            "barAlignment": 0
-          },
-          "mappings": [],
-          "thresholds": {
-            "mode": "absolute",
-            "steps": [
-              {
-                "color": "green",
-                "value": 0
-              },
-              {
-                "color": "red",
-                "value": 80
-              }
-            ]
-          },
-          "unit": "short",
-          "decimals": 0,
-          "min": 0
-        },
-        "overrides": []
-      },
-      "gridPos": {
-        "h": 6,
-        "w": 6,
-        "x": 0,
-        "y": 16
-      },
-      "id": 206,
-      "options": {
-        "legend": {
-          "calcs": [],
-          "displayMode": "list",
-          "placement": "bottom",
-          "showLegend": true
-        },
-        "tooltip": {
-          "mode": "multi",
-          "sort": "desc"
-        }
-      },
-      "pluginVersion": "12.3.3",
-      "targets": [
-        {
-          "datasource": {
-            "type": "prometheus",
-            "uid": "$ds"
-          },
-          "editorMode": "code",
-          "expr": "sum(up{job=\"ydb/utils\",container=\"ydb-dynamic\",database=~\"$database\"})",
-          "legendFormat": "вычислительные узлы",
-          "range": true,
-          "refId": "A"
-        },
-        {
-          "datasource": {
-            "type": "prometheus",
-            "uid": "$ds"
-          },
-          "editorMode": "code",
-          "expr": "sum(up{job=\"ydb/utils\",container=\"ydb-static\"})",
-          "legendFormat": "узлы хранения",
-          "range": true,
-          "refId": "B"
-        },
-        {
-          "datasource": {
-            "type": "prometheus",
-            "uid": "$ds"
-          },
-          "editorMode": "code",
-          "expr": "sum(up{job=\"node\"})",
-          "legendFormat": "серверы",
-          "range": true,
-          "refId": "C"
-        }
-      ],
-      "title": "Доступные узлы и серверы",
-      "type": "timeseries"
-    },
-    {
-      "datasource": {
-        "type": "prometheus",
-        "uid": "$ds"
-      },
       "fieldConfig": {
         "defaults": {
           "color": {
@@ -758,7 +646,7 @@
       },
       "gridPos": {
         "h": 8,
-        "w": 12,
+        "w": 6,
         "x": 12,
         "y": 8
       },
@@ -799,10 +687,10 @@
         "uid": "${ds}"
       },
       "gridPos": {
-        "h": 6,
+        "h": 8,
         "w": 6,
-        "x": 6,
-        "y": 16
+        "x": 18,
+        "y": 8
       },
       "fieldConfig": {
         "defaults": {
@@ -866,254 +754,6 @@
           "expr": "sum(ydb_partition_count{application=~\"$application\",object=\"vector\",path=~\".*/indexImplPostingTable\"})",
           "legendFormat": "векторный индекс",
           "refId": "C"
-        }
-      ]
-    },
-    {
-      "type": "table",
-      "title": "Данные и индексы",
-      "description": "Строки и логический объём основной таблицы и внутренних таблиц индексов по .sys/partition_stats. Число внутренних строк индекса не обязано совпадать с числом документов.",
-      "id": 208,
-      "datasource": {
-        "type": "prometheus",
-        "uid": "${ds}"
-      },
-      "gridPos": {
-        "h": 6,
-        "w": 6,
-        "x": 12,
-        "y": 16
-      },
-      "fieldConfig": {
-        "defaults": {},
-        "overrides": [
-          {
-            "matcher": {
-              "id": "byName",
-              "options": "Объект"
-            },
-            "properties": [
-              {
-                "id": "mappings",
-                "value": [
-                  {
-                    "type": "value",
-                    "options": {
-                      "main": {
-                        "index": 0,
-                        "text": "основная таблица"
-                      },
-                      "fulltext": {
-                        "index": 1,
-                        "text": "полнотекстовый индекс"
-                      },
-                      "vector": {
-                        "index": 2,
-                        "text": "векторный индекс"
-                      }
-                    }
-                  }
-                ]
-              }
-            ]
-          },
-          {
-            "matcher": {
-              "id": "byName",
-              "options": "Строки"
-            },
-            "properties": [
-              {
-                "id": "unit",
-                "value": "short"
-              },
-              {
-                "id": "decimals",
-                "value": 0
-              }
-            ]
-          },
-          {
-            "matcher": {
-              "id": "byName",
-              "options": "Объём"
-            },
-            "properties": [
-              {
-                "id": "unit",
-                "value": "bytes"
-              },
-              {
-                "id": "decimals",
-                "value": 0
-              }
-            ]
-          }
-        ]
-      },
-      "options": {
-        "showHeader": true,
-        "cellHeight": "sm",
-        "footer": {
-          "show": false,
-          "reducer": [
-            "sum"
-          ],
-          "countRows": false,
-          "fields": ""
-        },
-        "sortBy": []
-      },
-      "targets": [
-        {
-          "datasource": {
-            "type": "prometheus",
-            "uid": "$ds"
-          },
-          "expr": "label_replace(sum by (object) (ydb_partition_rows{application=~\"$application\",object=\"main\"}), \"sort_order\", \"1\", \"object\", \".*\") or label_replace(sum by (object) (ydb_partition_rows{application=~\"$application\",object=\"fulltext\"}), \"sort_order\", \"2\", \"object\", \".*\") or label_replace(sum by (object) (ydb_partition_rows{application=~\"$application\",object=\"vector\"}), \"sort_order\", \"3\", \"object\", \".*\")",
-          "format": "table",
-          "instant": true,
-          "legendFormat": "Строки",
-          "refId": "A"
-        },
-        {
-          "datasource": {
-            "type": "prometheus",
-            "uid": "$ds"
-          },
-          "expr": "label_replace(sum by (object) (ydb_partition_size_bytes{application=~\"$application\",object=\"main\"}), \"sort_order\", \"1\", \"object\", \".*\") or label_replace(sum by (object) (ydb_partition_size_bytes{application=~\"$application\",object=\"fulltext\"}), \"sort_order\", \"2\", \"object\", \".*\") or label_replace(sum by (object) (ydb_partition_size_bytes{application=~\"$application\",object=\"vector\"}), \"sort_order\", \"3\", \"object\", \".*\")",
-          "format": "table",
-          "instant": true,
-          "legendFormat": "Объём",
-          "refId": "B"
-        }
-      ],
-      "transformations": [
-        {
-          "id": "merge",
-          "options": {}
-        },
-        {
-          "id": "sortBy",
-          "options": {
-            "sort": [
-              {
-                "field": "sort_order",
-                "desc": false
-              }
-            ]
-          }
-        },
-        {
-          "id": "organize",
-          "options": {
-            "excludeByName": {
-              "Time": true,
-              "sort_order": true
-            },
-            "indexByName": {
-              "object": 0,
-              "Value #A": 1,
-              "Value #B": 2
-            },
-            "renameByName": {
-              "object": "Объект",
-              "Value #A": "Строки",
-              "Value #B": "Объём"
-            }
-          }
-        }
-      ]
-    },
-    {
-      "type": "stat",
-      "title": "Метрики качества поиска",
-      "description": "Последний офлайн-прогон по 1 252 запросам MIRACL RU.\n\nANN recall@30 — доля результатов exact top-30, найденная приближённым векторным поиском.\n\nqrel recall@30 — доля документов из эталонной разметки, найденная в первых 30 результатах полнотекстового, векторного или гибридного поиска.\n\nМетрики пересчитываются отдельно и не создают нагрузку во время демонстрации.",
-      "id": 215,
-      "datasource": {
-        "type": "prometheus",
-        "uid": "${ds}"
-      },
-      "gridPos": {
-        "h": 6,
-        "w": 6,
-        "x": 18,
-        "y": 16
-      },
-      "fieldConfig": {
-        "defaults": {
-          "unit": "percentunit",
-          "decimals": 0,
-          "color": {
-            "mode": "palette-classic"
-          },
-          "thresholds": {
-            "mode": "absolute",
-            "steps": [
-              {
-                "color": "green",
-                "value": null
-              }
-            ]
-          }
-        },
-        "overrides": []
-      },
-      "options": {
-        "colorMode": "none",
-        "graphMode": "none",
-        "justifyMode": "auto",
-        "orientation": "horizontal",
-        "reduceOptions": {
-          "calcs": [
-            "lastNotNull"
-          ],
-          "fields": "",
-          "values": false
-        },
-        "textMode": "auto",
-        "text": {
-          "titleSize": 12,
-          "valueSize": 18
-        },
-        "wideLayout": true
-      },
-      "targets": [
-        {
-          "datasource": {
-            "type": "prometheus",
-            "uid": "$ds"
-          },
-          "expr": "max(search_quality_ann_recall{application=~\"$application\",k=\"30\"})",
-          "legendFormat": "ANN recall@30",
-          "refId": "A"
-        },
-        {
-          "datasource": {
-            "type": "prometheus",
-            "uid": "$ds"
-          },
-          "expr": "max(search_quality_qrel_recall{application=~\"$application\",method=\"fulltext\",aggregation=\"micro\",k=\"30\"})",
-          "legendFormat": "полнотекст · qrel recall@30",
-          "refId": "B"
-        },
-        {
-          "datasource": {
-            "type": "prometheus",
-            "uid": "$ds"
-          },
-          "expr": "max(search_quality_qrel_recall{application=~\"$application\",method=\"vector\",aggregation=\"micro\",k=\"30\"})",
-          "legendFormat": "вектор · qrel recall@30",
-          "refId": "C"
-        },
-        {
-          "datasource": {
-            "type": "prometheus",
-            "uid": "$ds"
-          },
-          "expr": "max(search_quality_qrel_recall{application=~\"$application\",method=\"hybrid\",aggregation=\"micro\",k=\"30\"})",
-          "legendFormat": "гибрид · qrel recall@30",
-          "refId": "D"
         }
       ]
     }

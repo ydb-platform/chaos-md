@@ -98,13 +98,19 @@ def main() -> None:
     demo_titles = {panel.get("title") for panel in demo_panels}
     for title in {
         "Поисковые запросы и DML, RPS",
+        "Задержка p95, мс",
         "Ошибки и ретраи, RPS",
+        "User pool CPU по dynamic-узлам, %",
         "Самая загруженная таблетка, %",
         "Партиции",
-        "Данные и индексы",
-        "Метрики качества поиска",
     }:
         assert title in demo_titles, f"missing demo dashboard panel: {title}"
+
+    assert len(demo_panels) == 6, "demo dashboard must fit into two rows"
+    assert all(
+        variable.get("hide") == 2
+        for variable in demo.get("templating", {}).get("list", [])
+    ), "fixed dashboard variables must be hidden"
 
     demo_expressions = {
         target["expr"]
@@ -116,12 +122,8 @@ def main() -> None:
         "ydb_workload_target_rps",
         "ydb_workload_error_rps",
         "ydb_workload_retry_rps",
-        "ydb_partition_rows",
-        "ydb_partition_size_bytes",
         "ydb_partition_count",
         "ydb_tablet_cpu_cores",
-        "search_quality_ann_recall",
-        "search_quality_qrel_recall",
     }:
         assert any(metric in expression for expression in demo_expressions), metric
 
@@ -146,12 +148,13 @@ def main() -> None:
     partition_expressions = [target["expr"] for target in partition_panel["targets"]]
     assert any("indexImplDocsTable" in expression for expression in partition_expressions)
     assert any("indexImplPostingTable" in expression for expression in partition_expressions)
-    data_panel = next(panel for panel in demo_panels if panel.get("title") == "Данные и индексы")
-    assert data_panel["type"] == "table"
-    assert "Внутренние чтения и записи, строк/с" not in demo_titles
-    quality_panel = next(panel for panel in demo_panels if panel.get("title") == "Метрики качества поиска")
-    assert len(quality_panel["targets"]) == 4
-    assert quality_panel["fieldConfig"]["defaults"]["decimals"] == 0
+    for title in {
+        "Внутренние чтения и записи, строк/с",
+        "Доступные узлы и серверы",
+        "Данные и индексы",
+        "Метрики качества поиска",
+    }:
+        assert title not in demo_titles, f"static panel must stay out of demo: {title}"
 
     print("dashboard smoke: OK")
 
