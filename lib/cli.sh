@@ -8,6 +8,7 @@
 #   -t / --time SEC      длительность фазы хаоса
 #   -H / --host HOST     переопределить хост для -1
 #   --hosts h1,h2        явная группа хостов
+#   --operation ID       идентификатор операции, 32 hex
 #   -D / --teardown      снять хаос
 #   -C / --check [HOST]  показать состояние
 #   --json               машинный вывод в формате JSON Lines
@@ -35,6 +36,7 @@ CHAOS_REMAINING_ARGS=()
 
 chaos_parse_common() {
     CHAOS_REMAINING_ARGS=()
+    chaos_operation_prepare "$@"
     local arg
     for arg in "$@"; do
         [[ "${arg}" == --json ]] && chaos_json_enable
@@ -49,6 +51,7 @@ chaos_parse_common() {
             -D|--teardown) MODE_TEARDOWN=true; shift ;;
             -N|--dry-run)  CHAOS_DRY_RUN=true; shift ;;
             --json)        shift ;;
+            --operation)   shift 2 ;;
             --hosts)
                 if [[ -z "${2:-}" || "${2:-}" == ,* || "${2:-}" == *, || "${2:-}" == *,,* ]]; then
                     echo '--hosts требует непустой список хостов без пустых элементов' >&2
@@ -123,6 +126,7 @@ EOF
   -t, --time SEC        Длительность фазы хаоса, с (по умолчанию: ${DEFAULT_CHAOS_TIMEOUT:-1200})
   -H, --host HOST       Переопределить хост для -1
       --hosts h1,h2     Явная группа хостов с приоритетом над -1/-4/-A
+      --operation ID    Идентификатор операции (32 строчные hex-цифры)
   -D, --teardown        Снять хаос (откат). Без -1/-4/-A обрабатываются все хосты из env: NODE_HOST (-H), SINGLE_HOST, DC_HOSTS, DC_ALT_HOSTS и CLUSTER_HOSTS (дедуп).
   -C, --check [HOST]    Показать состояние (без HOST — ${SINGLE_HOST:-?})
   -N, --dry-run         Не выполнять ssh/scp; показать только что бы запустилось

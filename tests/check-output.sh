@@ -7,7 +7,7 @@ SANDBOX="$(mktemp -d)"
 trap 'rm -rf "${SANDBOX}"' EXIT
 mkdir -p "${SANDBOX}/lib" "${SANDBOX}/nemesis"
 cp "${ROOT}"/[0-9][0-9]-*.sh "${SANDBOX}/"
-for library in json.sh cli.sh hosts.sh util.sh test_runner.sh; do
+for library in operation.sh json.sh cli.sh hosts.sh util.sh test_runner.sh; do
     cp "${ROOT}/lib/${library}" "${SANDBOX}/lib/${library}"
 done
 cat > "${SANDBOX}/lib/init.sh" <<'INIT'
@@ -22,7 +22,7 @@ DEFAULT_NET_LOSS=10
 DEFAULT_BW_RATE=500
 CHAOS_DISK_RESTART_STORAGE=false
 YDB_PORTS=2135
-for library in json cli hosts util test_runner; do source "${SCRIPT_DIR}/lib/${library}.sh"; done
+for library in operation json cli hosts util test_runner; do source "${SCRIPT_DIR}/lib/${library}.sh"; done
 log() { printf '%s\n' "$*"; }
 record_check() {
     printf '%s\n' "$1" >> "${TEST_CALLS}"

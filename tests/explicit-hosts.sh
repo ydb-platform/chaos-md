@@ -1,6 +1,8 @@
 #!/usr/bin/env bash
 set -euo pipefail
 ROOT="${1:-$(cd "$(dirname "$0")/.." && pwd)}"
+source "${ROOT}/lib/operation.sh"
+source "${ROOT}/lib/json.sh"
 source "${ROOT}/lib/cli.sh"
 source "${ROOT}/lib/hosts.sh"
 SINGLE_HOST=node-a

@@ -13,7 +13,7 @@ SCRIPTS=(
     08-proc-freeze.sh 09-proc-kill.sh 11-dc-drop.sh
 )
 for script in "${SCRIPTS[@]}"; do cp "${ROOT}/${script}" "${SANDBOX}/${script}"; done
-for library in json.sh cli.sh hosts.sh util.sh; do cp "${ROOT}/lib/${library}" "${SANDBOX}/lib/${library}"; done
+for library in operation.sh json.sh cli.sh hosts.sh util.sh; do cp "${ROOT}/lib/${library}" "${SANDBOX}/lib/${library}"; done
 
 cat > "${SANDBOX}/lib/init.sh" <<'INIT'
 SINGLE_HOST=default-node
@@ -25,6 +25,7 @@ DEFAULT_BLADE_TIMEOUT=60
 DEFAULT_NET_DELAY=50
 DEFAULT_NET_LOSS=10
 YDB_PORTS=2135
+source "${SCRIPT_DIR}/lib/operation.sh"
 source "${SCRIPT_DIR}/lib/json.sh"
 source "${SCRIPT_DIR}/lib/cli.sh"
 source "${SCRIPT_DIR}/lib/hosts.sh"

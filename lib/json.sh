@@ -62,8 +62,9 @@ chaos_json_emit() {
     timestamp="$(date -u '+%Y-%m-%dT%H:%M:%SZ')"
     scope="${SCOPE_LABEL:-}"
     hosts="$(chaos_json_hosts)"
-    printf '{"schemaVersion":1,"test":"%s","action":"%s","event":"%s","result":"%s","exitCode":%s,"scope":"%s","hosts":%s,"timestamp":"%s","message":"%s"}\n' \
+    printf '{"schemaVersion":2,"test":"%s","operation":"%s","action":"%s","event":"%s","result":"%s","exitCode":%s,"scope":"%s","hosts":%s,"timestamp":"%s","message":"%s"}\n' \
         "$(chaos_json_escape "${TEST_NAME:-unknown}")" \
+        "$(chaos_json_escape "${CHAOS_OPERATION_ID:-}")" \
         "$(chaos_json_escape "${CHAOS_JSON_ACTION:-run}")" \
         "$(chaos_json_escape "${event}")" \
         "$(chaos_json_escape "${result}")" \
