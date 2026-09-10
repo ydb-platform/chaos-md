@@ -34,6 +34,8 @@ CHAOS_CMDLINE=("$0" "$@")
 source "${CHAOS_LIB_DIR}/term.sh"
 # shellcheck source=log.sh
 source "${CHAOS_LIB_DIR}/log.sh"
+# shellcheck source=json.sh
+source "${CHAOS_LIB_DIR}/json.sh"
 # shellcheck source=grafana.sh
 source "${CHAOS_LIB_DIR}/grafana.sh"
 # shellcheck source=timeline.sh

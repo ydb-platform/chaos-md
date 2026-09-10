@@ -80,7 +80,7 @@ if [[ "${MODE_CHECK}" == "true" ]]; then
     log_section "Проверка VictoriaMetrics на ${MON_HOST}"
     run_cmd "docker ps --filter name=^vm$ --format '{{.Names}}\t{{.Status}}\t{{.Ports}}'"
     run_cmd "curl -sf http://localhost:${VM_PORT}/-/ready && echo '  ready=ok' || echo '  ready=FAIL'"
-    run_cmd "curl -sf 'http://localhost:${VM_PORT}/api/v1/targets?state=unhealthy' | python3 -m json.tool 2>/dev/null | head -40 || true"
+    run_cmd "curl -sf 'http://localhost:${VM_PORT}/api/v1/targets?state=unhealthy' | jq . 2>/dev/null | head -40 || true"
     exit 0
 fi
 

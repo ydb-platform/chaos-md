@@ -17,7 +17,7 @@ REPO_DIR="$(cd "${SCRIPT_DIR}/.." && pwd)"
 # shellcheck source=../env.sh
 source "${REPO_DIR}/env.sh"
 
-DASHBOARD_JSON="${SCRIPT_DIR}/dashboards/chaos-tests.json"
+DASHBOARD_JSON="${SCRIPT_DIR}/dashboards/chaos/chaos-tests.json"
 STATE_FILE="${SCRIPT_DIR}/.chaos-grafana-last"
 FALLBACK_NAME="Chaos Tests"
 
@@ -42,59 +42,51 @@ else
     title="${input_name:-${default}}"
 fi
 
-echo "→ Деплой: «${title}»"
+echo "Деплой: ${title}"
 
-dash_url=$(GRAFANA_URL="${GRAFANA_URL}" GRAFANA_TOKEN="${GRAFANA_TOKEN}" \
-    DASH_JSON="${DASHBOARD_JSON}" DASH_TITLE="${title}" \
-    python3 <<'PY'
-import json, os, ssl, sys, urllib.error, urllib.parse, urllib.request
+tmp_dir="$(mktemp -d)"
+trap 'rm -rf "${tmp_dir}"' EXIT
+search_file="${tmp_dir}/search.json"
+full_file="${tmp_dir}/full.json"
+payload_file="${tmp_dir}/payload.json"
+response_file="${tmp_dir}/response.json"
 
-url   = os.environ["GRAFANA_URL"].rstrip("/")
-token = os.environ["GRAFANA_TOKEN"]
-title = os.environ["DASH_TITLE"]
+http_code="$(curl -sk --max-time 15 -o "${search_file}" -w '%{http_code}' \
+    -G "${GRAFANA_URL%/}/api/search" \
+    -H "Authorization: Bearer ${GRAFANA_TOKEN}" \
+    --data-urlencode "query=${title}" \
+    --data-urlencode 'type=dash-db')"
+[[ "${http_code}" == 200 ]] || { echo "Ошибка Grafana HTTP ${http_code}: $(cat "${search_file}")" >&2; exit 1; }
 
-ctx = ssl.create_default_context()
-ctx.check_hostname = False
-ctx.verify_mode = ssl.CERT_NONE
+uid="$(jq -r --arg title "${title}" '[.[] | select(.title == $title)][0].uid // empty' "${search_file}")"
+if [[ -n "${uid}" ]]; then
+    http_code="$(curl -sk --max-time 15 -o "${full_file}" -w '%{http_code}' \
+        "${GRAFANA_URL%/}/api/dashboards/uid/${uid}" \
+        -H "Authorization: Bearer ${GRAFANA_TOKEN}")"
+    [[ "${http_code}" == 200 ]] || { echo "Ошибка Grafana HTTP ${http_code}: $(cat "${full_file}")" >&2; exit 1; }
+    dash_id="$(jq -r '.dashboard.id' "${full_file}")"
+    version="$(jq -r '.dashboard.version // 1' "${full_file}")"
+    jq -n \
+        --slurpfile dashboards "${DASHBOARD_JSON}" \
+        --arg title "${title}" --arg uid "${uid}" \
+        --argjson id "${dash_id}" --argjson version "${version}" \
+        '{dashboard:($dashboards[0] + {title:$title,id:$id,uid:$uid,version:$version}),overwrite:true,message:"deploy-dashboard.sh"}' \
+        > "${payload_file}"
+    echo "Обновление uid=${uid}"
+else
+    jq -n --slurpfile dashboards "${DASHBOARD_JSON}" --arg title "${title}" \
+        '{dashboard:($dashboards[0] + {title:$title} | del(.id,.uid)),overwrite:false,message:"deploy-dashboard.sh"}' \
+        > "${payload_file}"
+    echo "Создание нового дашборда"
+fi
 
-def api(method, path, body=None):
-    req = urllib.request.Request(
-        f"{url}{path}",
-        headers={"Authorization": f"Bearer {token}", "Content-Type": "application/json"},
-        method=method,
-        data=json.dumps(body).encode() if body is not None else None,
-    )
-    try:
-        with urllib.request.urlopen(req, context=ctx, timeout=15) as r:
-            return json.loads(r.read())
-    except urllib.error.HTTPError as e:
-        print(f"HTTP {e.code}: {e.read().decode()}", file=sys.stderr)
-        sys.exit(1)
-
-with open(os.environ["DASH_JSON"]) as f:
-    dash = json.load(f)
-dash["title"] = title
-
-results = api("GET", f"/api/search?query={urllib.parse.quote(title)}&type=dash-db")
-existing = next((d for d in results if d["title"] == title), None)
-
-if existing:
-    full = api("GET", f"/api/dashboards/uid/{existing['uid']}")
-    dash["id"]      = full["dashboard"]["id"]
-    dash["uid"]     = existing["uid"]
-    dash["version"] = full["dashboard"].get("version", 1)
-    payload = {"dashboard": dash, "overwrite": True, "message": "deploy-dashboard.sh"}
-    print(f"  обновление uid={existing['uid']}", file=sys.stderr)
-else:
-    dash.pop("id",  None)
-    dash.pop("uid", None)
-    payload = {"dashboard": dash, "overwrite": False, "message": "deploy-dashboard.sh"}
-    print("  создание нового дашборда", file=sys.stderr)
-
-r = api("POST", "/api/dashboards/db", payload)
-print(f"{url}{r.get('url', '')}")
-PY
-)
+http_code="$(curl -sk --max-time 15 -o "${response_file}" -w '%{http_code}' \
+    -XPOST "${GRAFANA_URL%/}/api/dashboards/db" \
+    -H "Authorization: Bearer ${GRAFANA_TOKEN}" \
+    -H 'Content-Type: application/json' \
+    --data-binary "@${payload_file}")"
+[[ "${http_code}" == 200 ]] || { echo "Ошибка Grafana HTTP ${http_code}: $(cat "${response_file}")" >&2; exit 1; }
+dash_url="${GRAFANA_URL%/}$(jq -r '.url // empty' "${response_file}")"
 
 echo "${title}" > "${STATE_FILE}"
-echo "✓ ${dash_url}"
+echo "Готово: ${dash_url}"

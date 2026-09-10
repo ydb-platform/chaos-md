@@ -43,7 +43,11 @@ fi
 if [[ "${MODE_TEARDOWN}" == true ]]; then
     chaos_log_script_start
     trap 'chaos_log_script_end' EXIT
-    nemesis_iptables_teardown "${NODE_HOST}" "${IPT_TARGET}"
+    TARGET_HOSTS=("${NODE_HOST}")
+    if [[ -n "${EXPLICIT_HOSTS[*]:-}" || "${SCOPE_SINGLE}" == true || "${SCOPE_DC}" == true || "${SCOPE_DC_ALT}" == true ]]; then
+        chaos_resolve_teardown_targets || exit 1
+    fi
+    nemesis_iptables_teardown_all "${TARGET_HOSTS[@]}"
     log_tl "CHAOS_CANCEL" "net ${IPT_TARGET}  scope=node  host=${NODE_HOST}"
     exit 0
 fi

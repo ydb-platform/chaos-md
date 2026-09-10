@@ -56,8 +56,14 @@ fi
 if [[ "${MODE_TEARDOWN}" == true ]]; then
     chaos_log_script_start
     trap 'chaos_log_script_end' EXIT
-    nemesis_blade_destroy_all "uid"
-    log_tl "CHAOS_CANCEL" "cpu load  scope=all"
+    if [[ -n "${EXPLICIT_HOSTS[*]:-}" || "${SCOPE_SINGLE}" == true || "${SCOPE_DC}" == true || "${SCOPE_DC_ALT}" == true ]]; then
+        chaos_resolve_teardown_targets || exit 1
+        nemesis_blade_destroy_all "uid" "${TARGET_HOSTS[@]}"
+    else
+        nemesis_blade_destroy_all "uid"
+        SCOPE_LABEL=all
+    fi
+    log_tl "CHAOS_CANCEL" "cpu load  scope=${SCOPE_LABEL}"
     exit 0
 fi
 

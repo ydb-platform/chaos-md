@@ -40,7 +40,7 @@ done
 if [[ "${MODE_CHECK}" == true ]]; then
     if [[ "${SCOPE_SINGLE}" == true || "${SCOPE_DC}" == true || "${SCOPE_DC_ALT}" == true ]]; then
         chaos_resolve_targets
-        local _h
+        _h=""
         for _h in "${TARGET_HOSTS[@]}"; do
             nemesis_proc_check "${_h}"
         done

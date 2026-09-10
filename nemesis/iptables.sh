@@ -48,7 +48,7 @@ nemesis_iptables_prepare_chain_remote_script() {
 }
 
 _nemesis_iptables_remote_script() {
-    local target="$1"
+    local target="$1" timeout_s="${2:-0}"
     local jrule c
     jrule="$(_iptables_jrule "${target}")"
     c="$(_chaos_iptables_chain)"
@@ -85,11 +85,19 @@ _nemesis_iptables_remote_script() {
         fi
     done
 
+    # Host-side safety-таймер снимает iptables-изоляцию независимо от управляющего процесса.
+    if [[ "${timeout_s}" -gt 0 ]]; then
+        rb+=""$'\n'
+        rb+="# Safety-таймер: auto-teardown через ${timeout_s}s"$'\n'
+        rb+="nohup bash -c 'sleep ${timeout_s}; sudo iptables -w 2 -F ${c} 2>/dev/null || true; sudo ip6tables -w 2 -F ${c} 2>/dev/null || true' >/dev/null 2>&1 &"$'\n'
+        rb+="echo \"[iptables-chaos] safety-timer ${timeout_s}s pid=\$!\""$'\n'
+    fi
+
     printf '%s' "${rb}"
 }
 
 nemesis_iptables_apply() {
-    local host="$1" target="$2"
+    local host="$1" target="$2" timeout_s="${3:-${TIMEOUT:-0}}"
     chaos_net_require_any_stack || return 1
     chaos_net_ifaces_for_host "${host}"
     chaos_ydb_ports_to_array
@@ -106,11 +114,11 @@ nemesis_iptables_apply() {
     local c
     c="$(_chaos_iptables_chain)"
 
-    log_chaos_apply "iptables/ip6tables ${target} ports=${ports_csv} на ${host} ifaces=[${ifcsv}] stacks=[${stacks}] (цепочка ${c})"
+    log_chaos_apply "iptables/ip6tables ${target} ports=${ports_csv} на ${host} ifaces=[${ifcsv}] stacks=[${stacks}] timeout=${timeout_s}s (цепочка ${c})"
     chaos_term_remote_cmd "ssh ${host}  ${c} ${target} tcp ${ports_csv} ifaces=${ifcsv}"
 
     local remote_script
-    remote_script="$(_nemesis_iptables_remote_script "${target}")"
+    remote_script="$(_nemesis_iptables_remote_script "${target}" "${timeout_s}")"
 
     chaos_log_remote_script "Удалённый скрипт iptables, хост ${host}" "${remote_script}"
 
@@ -143,8 +151,8 @@ REMOTE
 
 nemesis_iptables_apply_all() {
     local target="${IPT_TARGET:-REJECT}"
-    log_chaos_apply "iptables ${target} на ${#@} хостах ports=${YDB_PORTS}"
-    parallel_for_hosts nemesis_iptables_apply "$@" -- "${target}"
+    log_chaos_apply "iptables ${target} на ${#@} хостах ports=${YDB_PORTS} timeout=${TIMEOUT:-0}s"
+    parallel_for_hosts nemesis_iptables_apply "$@" -- "${target}" "${TIMEOUT:-0}"
 }
 
 nemesis_iptables_teardown_all() {

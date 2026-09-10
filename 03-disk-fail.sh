@@ -50,17 +50,24 @@ fi
 if [[ "${MODE_TEARDOWN}" == true ]]; then
     chaos_log_script_start
     trap 'chaos_log_script_end' EXIT
-    nemesis_disk_teardown "${NODE_HOST}" "${DEVICE}"
-    if [[ "${RESTART_STORAGE}" == true ]]; then
-        log "Перезапуск storage после восстановления метки диска"
-        nemesis_proc_ydbd_restart "${NODE_HOST}"
+    TARGET_HOSTS=("${NODE_HOST}")
+    if [[ -n "${EXPLICIT_HOSTS[*]:-}" || "${SCOPE_SINGLE}" == true || "${SCOPE_DC}" == true || "${SCOPE_DC_ALT}" == true ]]; then
+        chaos_resolve_teardown_targets || exit 1
     fi
-    log_tl "CHAOS_CANCEL" "disk fail  scope=node  host=${NODE_HOST}  device=${DEVICE}"
+    for host in "${TARGET_HOSTS[@]}"; do
+        nemesis_disk_teardown "${host}" "${DEVICE}"
+        if [[ "${RESTART_STORAGE}" == true ]]; then
+            nemesis_proc_ydbd_restart "${host}"
+        fi
+    done
+    log_tl "CHAOS_CANCEL" "disk fail  hosts=${TARGET_HOSTS[*]}  device=${DEVICE}"
     exit 0
 fi
 
 chaos_require_scope || { chaos_usage >&2; exit 1; }
 chaos_resolve_targets
+[[ ${#TARGET_HOSTS[@]} -eq 1 ]] || { echo "disk apply requires one host" >&2; exit 1; }
+NODE_HOST="${TARGET_HOSTS[0]}"
 
 chaos_log_script_start
 trap 'chaos_log_script_end' EXIT

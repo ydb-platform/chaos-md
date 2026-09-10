@@ -37,6 +37,7 @@ chaos_run_window() {
     chaos_wait_with_timer "${TIMEOUT}" "${short}  ${SCOPE_LABEL}=${#TARGET_HOSTS[@]}h"
 
     "${teardown_fn}" "${TARGET_HOSTS[@]}"
+    chaos_json_emit teardown command_succeeded null "${short}  scope=${SCOPE_LABEL}  hosts=${#TARGET_HOSTS[@]}"
     log_tl "CHAOS_END  " "${short}  scope=${SCOPE_LABEL}  hosts=${#TARGET_HOSTS[@]}"
 }
 

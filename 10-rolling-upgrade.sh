@@ -74,7 +74,7 @@ chaos_require_scope || { chaos_usage >&2; exit 1; }
 chaos_resolve_targets
 
 chaos_log_script_start
-trap 'log_tl "CHAOS_CANCEL" "rolling upgrade  scope=node  host=${NODE_HOST}  (прервано; nohup-откат через ${TIMEOUT}с)" || true; chaos_log_script_end' EXIT
+trap 'rc=$?; log_tl "CHAOS_CANCEL" "rolling upgrade  scope=node  host=${NODE_HOST}  (прервано; nohup-откат через ${TIMEOUT}с)" || true; chaos_log_script_end "${rc}"' EXIT
 
 chaos_announce "host=${NODE_HOST}  dist=${DIST_NAME}  timeout=${TIMEOUT}s"
 

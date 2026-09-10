@@ -7,8 +7,10 @@
 #   -A / --dc-alt        scope: альтернативный ДЦ (DC_ALT_HOSTS)
 #   -t / --time SEC      длительность фазы хаоса
 #   -H / --host HOST     переопределить хост для -1
+#   --hosts h1,h2        явная группа хостов
 #   -D / --teardown      снять хаос
 #   -C / --check [HOST]  показать состояние
+#   --json               машинный вывод в формате JSON Lines
 #   -h / --help          справка
 #
 # chaos_parse_common "$@"  — заполняет глобалы, неузнанные опции складывает
@@ -20,8 +22,11 @@
 SCOPE_SINGLE=false
 SCOPE_DC=false
 SCOPE_DC_ALT=false
+# --hosts h1,h2,... — явная группа хостов с приоритетом над scope
+EXPLICIT_HOSTS=()
 MODE_TEARDOWN=false
 MODE_CHECK=false
+MODE_JSON="${MODE_JSON:-false}"
 CHECK_HOST=""
 NODE_HOST="${SINGLE_HOST:-}"
 TIMEOUT="${DEFAULT_CHAOS_TIMEOUT:-1200}"
@@ -30,6 +35,10 @@ CHAOS_REMAINING_ARGS=()
 
 chaos_parse_common() {
     CHAOS_REMAINING_ARGS=()
+    local arg
+    for arg in "$@"; do
+        [[ "${arg}" == --json ]] && chaos_json_enable
+    done
     while [[ $# -gt 0 ]]; do
         case "$1" in
             -1|--single)   SCOPE_SINGLE=true; shift ;;
@@ -39,6 +48,11 @@ chaos_parse_common() {
             -H|--host)     NODE_HOST="$2";    shift 2 ;;
             -D|--teardown) MODE_TEARDOWN=true; shift ;;
             -N|--dry-run)  CHAOS_DRY_RUN=true; shift ;;
+            --json)        shift ;;
+            --hosts)
+                # Явный список хостов через запятую: --hosts h1,h2,h3
+                IFS=',' read -r -a EXPLICIT_HOSTS <<< "$2"
+                shift 2 ;;
             -C|--check)
                 MODE_CHECK=true
                 CHECK_HOST="${SINGLE_HOST:-}"
@@ -48,6 +62,13 @@ chaos_parse_common() {
             *) CHAOS_REMAINING_ARGS+=("$1"); shift ;;
         esac
     done
+    if [[ "${MODE_CHECK}" == true ]]; then
+        CHAOS_JSON_ACTION=check
+    elif [[ "${MODE_TEARDOWN}" == true ]]; then
+        CHAOS_JSON_ACTION=teardown
+    else
+        CHAOS_JSON_ACTION=run
+    fi
 }
 
 # Печать справки. Тест переопределяет chaos_usage_extra (печать строк
@@ -97,9 +118,11 @@ EOF
         cat <<EOF
   -t, --time SEC        Длительность фазы хаоса, с (по умолчанию: ${DEFAULT_CHAOS_TIMEOUT:-1200})
   -H, --host HOST       Переопределить хост для -1
+      --hosts h1,h2     Явная группа хостов с приоритетом над -1/-4/-A
   -D, --teardown        Снять хаос (откат). Без -1/-4/-A обрабатываются все хосты из env: NODE_HOST (-H), SINGLE_HOST, DC_HOSTS, DC_ALT_HOSTS и CLUSTER_HOSTS (дедуп).
   -C, --check [HOST]    Показать состояние (без HOST — ${SINGLE_HOST:-?})
   -N, --dry-run         Не выполнять ssh/scp; показать только что бы запустилось
+      --json            JSON Lines в stdout; человекочитаемый вывод остаётся в stderr
 EOF
     else
         echo "  -C, --check [HOST]    Показать состояние (без HOST — ${SINGLE_HOST:-?})"
@@ -122,6 +145,12 @@ EOF
 # Проверка scope. Печатает в stderr и возвращает 1 при ошибке.
 chaos_require_scope() {
     local mode="${1:-${TEST_SCOPE:-either}}"
+
+    # --hosts всегда принимается как explicit scope.
+    if [[ -n "${EXPLICIT_HOSTS[*]:-}" ]]; then
+        return 0
+    fi
+
     case "${mode}" in
         single)
             [[ "${SCOPE_SINGLE}" == true ]] || { echo "Ошибка: укажите -1 (одна нода)." >&2; return 1; }

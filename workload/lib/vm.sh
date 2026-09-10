@@ -18,10 +18,8 @@ vm_post_lines() {
 vm_time_ns() {
     if date +%s%N 2>/dev/null | grep -q '^[0-9]\{19\}$'; then
         date +%s%N
-    elif command -v python3 >/dev/null 2>&1; then
-        python3 -c 'import time; print(int(time.time()*1e9))'
     else
-        # macOS BSD date без %N — деградируем до миллисекунд → ns.
+        # macOS BSD date без %N — деградируем до секундной точности.
         echo $(( $(date +%s) * 1000000000 ))
     fi
 }

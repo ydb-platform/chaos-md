@@ -9,6 +9,12 @@ SCOPE_LABEL=""
 
 chaos_resolve_targets() {
     TARGET_HOSTS=()
+    # --hosts имеет приоритет над -1/-4/-A.
+    if [[ -n "${EXPLICIT_HOSTS[*]:-}" ]]; then
+        TARGET_HOSTS=("${EXPLICIT_HOSTS[@]}")
+        SCOPE_LABEL="explicit"
+        return 0
+    fi
     if [[ "${SCOPE_SINGLE}" == true ]]; then
         TARGET_HOSTS=("${NODE_HOST}")
         SCOPE_LABEL="node"
@@ -26,7 +32,7 @@ chaos_resolve_targets() {
 # чтобы снять tc/iptables‑подобное со всех нод кластера: одной только пары SINGLE+DC
 # недостаточно, если хаос запускали на ноде из CLUSTER_HOSTS или с «-1 -H другой_хост».
 chaos_resolve_teardown_targets() {
-    if [[ "${SCOPE_SINGLE}" == true || "${SCOPE_DC}" == true || "${SCOPE_DC_ALT}" == true ]]; then
+    if [[ -n "${EXPLICIT_HOSTS[*]:-}" || "${SCOPE_SINGLE}" == true || "${SCOPE_DC}" == true || "${SCOPE_DC_ALT}" == true ]]; then
         chaos_resolve_targets
         return 0
     fi

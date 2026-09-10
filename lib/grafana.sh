@@ -8,8 +8,6 @@
 _grafana_time_ms() {
     if date +%s%3N 2>/dev/null | grep -q '^[0-9]\{13\}$'; then
         date +%s%3N
-    elif command -v python3 >/dev/null 2>&1; then
-        python3 -c "import time; print(int(time.time()*1000))"
     else
         echo $(( $(date +%s) * 1000 ))
     fi
@@ -20,11 +18,7 @@ _grafana_id_file() {
 }
 
 _grafana_json_text() {
-    if command -v python3 >/dev/null 2>&1; then
-        printf '%s' "$1" | python3 -c 'import json,sys; print(json.dumps(sys.stdin.read()))'
-    else
-        printf '"%s"' "${1//\"/\\\"}"
-    fi
+    printf '"%s"' "$(chaos_json_escape "$1")"
 }
 
 # Открыть регион. Сохраняет id для дальнейшего close.

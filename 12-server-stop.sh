@@ -68,7 +68,7 @@ chaos_require_scope || { chaos_usage >&2; exit 1; }
 chaos_resolve_targets
 
 chaos_log_script_start
-trap 'log_tl "CHAOS_CANCEL" "server stop  (прервано)" || true; chaos_log_script_end' EXIT
+trap 'rc=$?; log_tl "CHAOS_CANCEL" "server stop  (прервано)" || true; chaos_log_script_end "${rc}"' EXIT
 
 chaos_announce "stop ${YDBD_STORAGE_SERVICE} + ${#YDBD_TENANT_SERVICES[@]} tenant  timeout=${TIMEOUT}s  scope=${SCOPE_LABEL}"
 

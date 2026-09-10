@@ -65,7 +65,7 @@ nemesis_blade_run() {
     case "${_kl}" in on | off) chaos_log_remote_line "${_kl}" "${_bk}" ;; *) log "  ${_bk}" ;; esac
 
     local out
-    out=$(ssh "${SSH_OPTS[@]}" "${host}" "${BLADE_REMOTE} ${args}")
+    out=$(ssh ${SSH_OPTS[@]+"${SSH_OPTS[@]}"} "${host}" "${BLADE_REMOTE} ${args}")
     log "blade ${host} [${suffix}]: ${out}"
 
     local uid; uid=$(echo "${out}" | _blade_extract_uid)
@@ -94,8 +94,15 @@ nemesis_blade_destroy() {
     case "${_kl}" in on | off) chaos_log_remote_line "${_kl}" "${_bk}" ;; *) log "  ${_bk}" ;; esac
 
     local out
-    out=$(ssh "${SSH_OPTS[@]}" "${host}" "${BLADE_REMOTE} destroy ${uid}" 2>&1 || true)
+    if ! out=$(ssh ${SSH_OPTS[@]+"${SSH_OPTS[@]}"} "${host}" "${BLADE_REMOTE} destroy ${uid}" 2>&1); then
+        log "blade destroy failed ${host}: ${out}"
+        return 1
+    fi
     log "blade destroy ${host}: ${out}"
+    if [[ "${out}" != *'"success":true'* && "${out}" != *'"success": true'* ]]; then
+        log "blade destroy ${host}: success not confirmed; UID retained"
+        return 1
+    fi
     rm -f "${sf}"
 }
 
@@ -113,13 +120,16 @@ nemesis_blade_check() {
         local suffix="${f##*.}" uid; uid=$(cat "${f}")
         echo "  [${suffix}] uid=${uid}"
         chaos_term_remote_cmd "ssh ${host}  blade status ${uid}"
-        ssh "${SSH_OPTS[@]}" "${host}" "${BLADE_REMOTE} status ${uid}" 2>&1 | head -3 || true
+        ssh ${SSH_OPTS[@]+"${SSH_OPTS[@]}"} "${host}" "${BLADE_REMOTE} status ${uid}" 2>&1 | head -3 || true
     done
 }
 
 # Параллельно отменить все сохранённые UID текущего теста с заданным суффиксом.
 nemesis_blade_destroy_all() {
     local suffix="${1:-uid}"
+    [[ $# -gt 0 ]] && shift
+    local allowed=() candidate include
+    allowed=("$@")
     local files=("${LOG_DIR}/${TEST_NAME}".*."${suffix}")
     if [[ ! -f "${files[0]:-}" ]]; then
         log "Нет сохранённых UID (${TEST_NAME}, ${suffix})"
@@ -131,9 +141,17 @@ nemesis_blade_destroy_all() {
         [[ -f "${f}" ]] || continue
         base="${f##*/}"; base="${base#"${TEST_NAME}."}"
         host="${base%."${suffix}"}"
+        if [[ -n "${allowed[*]:-}" ]]; then
+            include=false
+            for candidate in "${allowed[@]}"; do
+                [[ "${host}" == "${candidate}" ]] && include=true
+            done
+            [[ "${include}" == true ]] || continue
+        fi
         nemesis_blade_destroy "${host}" "${suffix}" &
         pids+=($!)
     done
-    local pid
-    for pid in "${pids[@]}"; do wait "${pid}" || true; done
+    local pid rc=0
+    for pid in "${pids[@]+"${pids[@]}"}"; do wait "${pid}" || rc=1; done
+    return "${rc}"
 }
