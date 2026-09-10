@@ -5,12 +5,28 @@ CHAOS_TC_STATE_DIR="${CHAOS_TC_STATE_DIR:-/var/lib/chaos-md}"
 _nemesis_tc_run_remote() {
     local host="$1" action="$2"
     shift 2
-    local remote_cmd arg
+    local remote_cmd arg output line rc=0
     printf -v remote_cmd 'sudo bash -s -- %q' "${action}"
     for arg in "$@"; do
         printf -v remote_cmd '%s %q' "${remote_cmd}" "${arg}"
     done
-    ssh "${SSH_OPTS[@]}" "${host}" "${remote_cmd}" < "${CHAOS_REPO_DIR}/nemesis/tc-remote.sh"
+    output="$(ssh "${SSH_OPTS[@]}" "${host}" "${remote_cmd}" < "${CHAOS_REPO_DIR}/nemesis/tc-remote.sh")" || rc=$?
+    while IFS= read -r line || [[ -n "${line}" ]]; do
+        [[ -n "${line}" ]] || continue
+        if [[ "${line}" =~ ^observation\ operation=([0-9a-f]{32})\ resource=(tc:[A-Za-z0-9_.:-]+)\ state=(active|clean|check_failed|unreachable)\ boot_id=([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\ revision=([0-9]+)\ recovery_armed=(true|false)\ cancelled=(true|false)\ code=([A-Za-z0-9_.:-]+)$ ]]; then
+            [[ "${BASH_REMATCH[1]}" == "${CHAOS_OPERATION_ID}" ]] || return 1
+            printf '%s %s %s recovery=%s cancelled=%s code=%s\n' \
+                "${host}" "${BASH_REMATCH[2]}" "${BASH_REMATCH[3]}" \
+                "${BASH_REMATCH[6]}" "${BASH_REMATCH[7]}" "${BASH_REMATCH[8]}"
+            chaos_json_emit_observation "${host}" "${BASH_REMATCH[2]}" "${BASH_REMATCH[3]}" \
+                "${BASH_REMATCH[4]}" "${BASH_REMATCH[5]}" "${BASH_REMATCH[6]}" \
+                "${BASH_REMATCH[7]}" "${BASH_REMATCH[8]}"
+        else
+            echo "Некорректное наблюдение tc от ${host}: ${line}" >&2
+            return 1
+        fi
+    done <<< "${output}"
+    return "${rc}"
 }
 
 nemesis_tc_netem_apply() {
@@ -54,7 +70,7 @@ nemesis_tc_teardown() {
     chaos_term_remote_cmd "ssh ${host}  tc qdisc del root ifaces=${ifaces_csv}"
 
     if [[ "${MODE_TEARDOWN:-false}" == true && "${CHAOS_OPERATION_EXPLICIT:-false}" != true ]]; then
-        _nemesis_tc_run_remote "${host}" teardown-all "${CHAOS_TC_STATE_DIR}" "${ifaces_csv}"
+        _nemesis_tc_run_remote "${host}" teardown-all "${CHAOS_OPERATION_ID}" "${CHAOS_TC_STATE_DIR}" "${ifaces_csv}"
     else
         _nemesis_tc_run_remote "${host}" teardown "${CHAOS_OPERATION_ID}" "${CHAOS_TC_STATE_DIR}" "${ifaces_csv}"
     fi
@@ -68,7 +84,7 @@ nemesis_tc_check() {
     ifaces_csv="${ifaces_csv// /,}"
     [[ "${CHAOS_OPERATION_EXPLICIT:-false}" == true ]] && operation="${CHAOS_OPERATION_ID}"
     chaos_term_remote_cmd "ssh ${host}  tc operation check ifaces=${ifaces_csv}"
-    _nemesis_tc_run_remote "${host}" check "${operation}" "${CHAOS_TC_STATE_DIR}" "${ifaces_csv}"
+    _nemesis_tc_run_remote "${host}" check "${CHAOS_OPERATION_ID}" "${operation}" "${CHAOS_TC_STATE_DIR}" "${ifaces_csv}"
 }
 
 nemesis_tc_netem_apply_all() {

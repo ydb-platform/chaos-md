@@ -33,11 +33,24 @@ json="$(${BASH:-bash} -c '
     chaos_json_emit apply command_succeeded null "quoted \"value\""
     chaos_json_exit_trap 0
 ' _ "${ROOT}" 2>/dev/null)"
-expected='{"schemaVersion":2,"test":"sample","operation":"0123456789abcdef0123456789abcdef","action":"run","event":"apply","result":"command_succeeded","exitCode":null,"scope":"","hosts":["node-a"],"timestamp":"'
+expected='{"schemaVersion":3,"kind":"command","test":"sample","operation":"0123456789abcdef0123456789abcdef","action":"run","event":"apply","result":"command_succeeded","exitCode":null,"scope":"","hosts":["node-a"],"timestamp":"'
 [[ "${json}" == "${expected}"* ]]
 grep -Fq '"message":"quoted \"value\""}' <<< "${json}"
 [[ "$(printf '%s\n' "${json}" | wc -l | tr -d ' ')" == 2 ]]
 while IFS= read -r line; do jq -e . >/dev/null <<< "${line}"; done <<< "${json}"
+
+observation="$(${BASH:-bash} -c '
+    TEST_NAME=sample
+    CHAOS_OPERATION_ID=0123456789abcdef0123456789abcdef
+    CHAOS_JSON_ACTION=run
+    source "$1/lib/json.sh"
+    chaos_json_enable
+    chaos_json_emit_observation node-a tc:eth0 active aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee 7 true false ok
+    CHAOS_JSON_TERMINAL_EMITTED=true
+' _ "${ROOT}" 2>/dev/null)"
+jq -e '.schemaVersion == 3 and .kind == "observation" and .host == "node-a"
+    and .resource == "tc:eth0" and .state == "active" and .revision == 7
+    and .recoveryArmed == true and .cancelled == false' <<< "${observation}" >/dev/null
 
 message=$'path\\new\\test "quoted"\n\t\r\b\f\001 Привет'
 escaped="$(${BASH:-bash} -c 'source "$1/lib/json.sh"; chaos_json_escape "$2"' _ "${ROOT}" "${message}")"

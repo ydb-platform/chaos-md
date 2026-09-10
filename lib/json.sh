@@ -62,7 +62,7 @@ chaos_json_emit() {
     timestamp="$(date -u '+%Y-%m-%dT%H:%M:%SZ')"
     scope="${SCOPE_LABEL:-}"
     hosts="$(chaos_json_hosts)"
-    printf '{"schemaVersion":2,"test":"%s","operation":"%s","action":"%s","event":"%s","result":"%s","exitCode":%s,"scope":"%s","hosts":%s,"timestamp":"%s","message":"%s"}\n' \
+    printf '{"schemaVersion":3,"kind":"command","test":"%s","operation":"%s","action":"%s","event":"%s","result":"%s","exitCode":%s,"scope":"%s","hosts":%s,"timestamp":"%s","message":"%s"}\n' \
         "$(chaos_json_escape "${TEST_NAME:-unknown}")" \
         "$(chaos_json_escape "${CHAOS_OPERATION_ID:-}")" \
         "$(chaos_json_escape "${CHAOS_JSON_ACTION:-run}")" \
@@ -73,6 +73,23 @@ chaos_json_emit() {
         "${hosts}" \
         "${timestamp}" \
         "$(chaos_json_escape "${message}")" >&3
+}
+
+chaos_json_emit_observation() {
+    [[ "${MODE_JSON:-false}" == true ]] || return 0
+    local host="$1" resource="$2" state="$3" boot_id="$4" revision="$5"
+    local recovery_armed="$6" cancelled="$7" code="$8" timestamp
+    timestamp="$(date -u '+%Y-%m-%dT%H:%M:%SZ')"
+    printf '{"schemaVersion":3,"kind":"observation","test":"%s","operation":"%s","action":"%s","host":"%s","resource":"%s","state":"%s","bootId":"%s","revision":%s,"recoveryArmed":%s,"cancelled":%s,"timestamp":"%s","message":"%s"}\n' \
+        "$(chaos_json_escape "${TEST_NAME:-unknown}")" \
+        "$(chaos_json_escape "${CHAOS_OPERATION_ID:-}")" \
+        "$(chaos_json_escape "${CHAOS_JSON_ACTION:-run}")" \
+        "$(chaos_json_escape "${host}")" \
+        "$(chaos_json_escape "${resource}")" \
+        "$(chaos_json_escape "${state}")" \
+        "$(chaos_json_escape "${boot_id}")" \
+        "${revision}" "${recovery_armed}" "${cancelled}" "${timestamp}" \
+        "$(chaos_json_escape "${code}")" >&3
 }
 
 chaos_json_exit_trap() {

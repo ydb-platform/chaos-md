@@ -30,7 +30,7 @@ operation=0123456789abcdef0123456789abcdef
 "${BASH_BIN}" "${SANDBOX}/04-net-delay.sh" --json --check --hosts selected-a --operation "${operation}" \
     > "${SANDBOX}/explicit" 2>/dev/null
 jq -se --arg operation "${operation}" \
-    'length == 2 and all(.[]; .schemaVersion == 2 and .operation == $operation)' \
+    'length == 2 and all(.[]; .schemaVersion == 3 and .operation == $operation)' \
     "${SANDBOX}/explicit" >/dev/null
 
 "${BASH_BIN}" "${SANDBOX}/04-net-delay.sh" --json --check --hosts selected-a \

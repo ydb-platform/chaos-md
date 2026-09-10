@@ -11,7 +11,17 @@ mkdir -p "${TMP}/bin" "${TMP}/tc"
 
 cat > "${TMP}/bin/flock" <<'SH'
 #!/usr/bin/env bash
+[[ "${FAKE_FLOCK_FAIL:-false}" == true ]] && exit 1
 exit 0
+SH
+
+cat > "${TMP}/bin/timeout" <<'SH'
+#!/usr/bin/env bash
+set -euo pipefail
+[[ "${1:-}" == --signal=KILL ]] && shift
+shift
+printf '%s\n' "$*" >> "${FAKE_TIMEOUT_LOG:?}"
+exec "$@"
 SH
 
 cat > "${TMP}/bin/tc" <<'SH'
@@ -19,6 +29,12 @@ cat > "${TMP}/bin/tc" <<'SH'
 set -euo pipefail
 
 state="${FAKE_TC_STATE:?}"
+if [[ "${1:-}" == -batch ]]; then
+    while IFS= read -r line || [[ -n "${line}" ]]; do
+        "$0" ${line}
+    done < "$2"
+    exit 0
+fi
 [[ "${1:-}" == qdisc || "${1:-}" == filter ]] || exit 2
 
 if [[ "$1" == filter ]]; then
@@ -65,9 +81,11 @@ case "${action}" in
 esac
 SH
 
-chmod +x "${TMP}/bin/flock" "${TMP}/bin/tc"
+chmod +x "${TMP}/bin/flock" "${TMP}/bin/timeout" "${TMP}/bin/tc"
 export PATH="${TMP}/bin:${PATH}"
 export FAKE_TC_STATE="${TMP}/tc"
+export FAKE_TIMEOUT_LOG="${TMP}/timeout.log"
+export CHAOS_TC_BOOT_ID=aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee
 
 OP1=11111111111111111111111111111111
 OP2=22222222222222222222222222222222
@@ -124,16 +142,16 @@ RECOVER1="${STATE}/operations/${OP1}/recover.sh"
 assert_present "${RECOVER1}"
 run_remote teardown "${OP1}" "${STATE}" eth0
 run_remote apply-tbf "${OP2}" "${STATE}" 30 eth0 10 1600
-run_remote check "${OP2}" "${STATE}" eth0 | grep -q 'state=active'
+run_remote check "${OP2}" "${OP2}" "${STATE}" eth0 | grep -q 'state=active'
 bash "${RECOVER1}" "${OP1}" "${STATE}" 0
 grep -q 'qdisc tbf 8001: root' "${TMP}/tc/eth0"
 grep -q "${OP2}" "${STATE}/owners/tc.eth0"
 run_remote teardown "${OP2}" "${STATE}" eth0
-run_remote check "${OP2}" "${STATE}" eth0 | grep -q 'state=clean'
+run_remote check "${OP2}" "${OP2}" "${STATE}" eth0 | grep -q 'state=clean'
 
 run_remote apply-tbf "${OP3}" "${STATE}" 30 eth0 10 1600
-run_remote teardown-all "${STATE}" eth0
-run_remote check any "${STATE}" eth0 | grep -q 'state=clean'
+run_remote teardown-all "${OP3}" "${STATE}" eth0
+run_remote check "${OP3}" any "${STATE}" eth0 | grep -q 'state=clean'
 
 rm -rf "${STATE}"
 mkdir -p "${STATE}/owners"
@@ -144,7 +162,27 @@ if run_remote apply-tbf "${OP1}" "${STATE}" 30 eth0 10 1600; then
 fi
 grep -q '^broken$' "${STATE}/owners/tc.eth0"
 assert_absent "${TMP}/tc/eth0"
-run_remote teardown-all "${STATE}" eth0
+run_remote teardown-all "${OP2}" "${STATE}" eth0
 assert_absent "${STATE}/owners/tc.eth0"
+
+rm -rf "${STATE}"
+printf '%s\n' 'qdisc cake 8001: root' > "${TMP}/tc/eth0"
+if run_remote apply-tbf "${OP1}" "${STATE}" 30 eth0 10 1600; then
+    echo 'Неподдерживаемый исходный qdisc был заменен' >&2
+    exit 1
+fi
+grep -q 'qdisc cake 8001: root' "${TMP}/tc/eth0"
+assert_absent "${STATE}/owners/tc.eth0"
+rm -f "${TMP}/tc/eth0"
+
+rm -rf "${STATE}"
+export FAKE_FLOCK_FAIL=true
+if run_remote apply-tbf "${OP1}" "${STATE}" 30 eth0 10 1600; then
+    echo 'Ошибка блокировки была принята' >&2
+    exit 1
+fi
+unset FAKE_FLOCK_FAIL
+assert_absent "${TMP}/tc/eth0"
+grep -q 'qdisc show dev eth0' "${FAKE_TIMEOUT_LOG}"
 
 echo 'tc operation tests: ok'
