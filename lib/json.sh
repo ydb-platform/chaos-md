@@ -7,12 +7,12 @@ CHAOS_JSON_ACTION="${CHAOS_JSON_ACTION:-run}"
 
 chaos_json_escape() {
     local value="${1:-}" out="" char code i
-    LC_ALL=C
+    local LC_ALL=C
     for ((i = 0; i < ${#value}; i++)); do
         char="${value:i:1}"
         case "${char}" in
             '"') out+='\"' ;;
-            '\\') out+='\\\\' ;;
+            '\') out+='\\' ;;
             $'\b') out+='\b' ;;
             $'\f') out+='\f' ;;
             $'\n') out+='\n' ;;
@@ -20,7 +20,7 @@ chaos_json_escape() {
             $'\t') out+='\t' ;;
             *)
                 printf -v code '%d' "'${char}"
-                if ((code < 32)); then
+                if ((code >= 0 && code < 32)); then
                     printf -v char '\\u%04x' "${code}"
                 fi
                 out+="${char}"
@@ -42,7 +42,9 @@ chaos_json_array() {
 }
 
 chaos_json_hosts() {
-    if [[ -n "${TARGET_HOSTS[*]:-}" ]]; then
+    if [[ -n "${SCOPE_LABEL:-}" ]]; then
+        chaos_json_array ${TARGET_HOSTS[@]+"${TARGET_HOSTS[@]}"}
+    elif [[ -n "${TARGET_HOSTS[*]:-}" ]]; then
         chaos_json_array "${TARGET_HOSTS[@]}"
     elif [[ -n "${EXPLICIT_HOSTS[*]:-}" ]]; then
         chaos_json_array "${EXPLICIT_HOSTS[@]}"
@@ -93,17 +95,4 @@ chaos_json_enable() {
     exec 3>&1
     exec 1>&2
     trap 'chaos_json_exit_trap $?' EXIT
-}
-
-chaos_json_run_check() {
-    local rc=0
-    "$@" || rc=$?
-    CHAOS_JSON_ACTION=check
-    if ((rc == 0)); then
-        chaos_json_emit check command_succeeded "${rc}"
-    else
-        chaos_json_emit check command_failed "${rc}"
-    fi
-    CHAOS_JSON_TERMINAL_EMITTED=true
-    return "${rc}"
 }

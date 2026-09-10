@@ -37,21 +37,7 @@ if (( ${#CHAOS_REMAINING_ARGS[@]} > 0 )); then
 fi
 
 if [[ "${MODE_CHECK}" == true ]]; then
-    if [[ "${SCOPE_DC}" == true ]]; then
-        for h in "${DC_HOSTS[@]}"; do
-            echo ">>> ${h}"
-            nemesis_systemd_check "${h}"
-            echo ""
-        done
-    elif [[ "${SCOPE_DC_ALT}" == true ]]; then
-        for h in "${DC_ALT_HOSTS[@]}"; do
-            echo ">>> ${h}"
-            nemesis_systemd_check "${h}"
-            echo ""
-        done
-    else
-        nemesis_systemd_check "${CHECK_HOST}"
-    fi
+    chaos_run_checks nemesis_systemd_check
     exit 0
 fi
 

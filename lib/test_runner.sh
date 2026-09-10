@@ -15,6 +15,13 @@ chaos_announce() {
     log "Параметры: $*"
 }
 
+chaos_run_checks() {
+    local check_fn="$1"; shift
+    chaos_resolve_check_targets
+    parallel_for_hosts "${check_fn}" "${TARGET_HOSTS[@]}" -- "$@"
+    chaos_json_emit check command_succeeded null
+}
+
 # Запустить хаос с автоматическим тикером и явным снятием по окончании окна.
 #
 # Использование:

@@ -35,6 +35,11 @@ grep -Fq '"message":"quoted \"value\""}' <<< "${json}"
 [[ "$(printf '%s\n' "${json}" | wc -l | tr -d ' ')" == 2 ]]
 while IFS= read -r line; do jq -e . >/dev/null <<< "${line}"; done <<< "${json}"
 
+message=$'path\\new\\test "quoted"\n\t\r\b\f\001 Привет'
+escaped="$(${BASH:-bash} -c 'source "$1/lib/json.sh"; chaos_json_escape "$2"' _ "${ROOT}" "${message}")"
+jq -en --arg expected "${message}" --arg encoded "\"${escaped}\"" \
+    '$encoded | fromjson == $expected' >/dev/null
+
 set +e
 failed="$(${BASH:-bash} -c '
     TEST_NAME=sample

@@ -36,7 +36,7 @@ i=0; while (( i < ${#CHAOS_REMAINING_ARGS[@]} )); do
 done
 
 if [[ "${MODE_CHECK}" == true ]]; then
-    nemesis_iptables_check "${CHECK_HOST}"
+    chaos_run_checks nemesis_iptables_check
     exit 0
 fi
 

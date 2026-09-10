@@ -49,7 +49,7 @@ _apply() {
 }
 
 if [[ "${MODE_CHECK}" == true ]]; then
-    nemesis_blade_check "${CHECK_HOST}"
+    chaos_run_checks nemesis_blade_check
     exit 0
 fi
 

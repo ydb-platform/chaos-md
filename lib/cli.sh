@@ -50,6 +50,10 @@ chaos_parse_common() {
             -N|--dry-run)  CHAOS_DRY_RUN=true; shift ;;
             --json)        shift ;;
             --hosts)
+                if [[ -z "${2:-}" || "${2:-}" == ,* || "${2:-}" == *, || "${2:-}" == *,,* ]]; then
+                    echo '--hosts требует непустой список хостов без пустых элементов' >&2
+                    return 1
+                fi
                 # Явный список хостов через запятую: --hosts h1,h2,h3
                 IFS=',' read -r -a EXPLICIT_HOSTS <<< "$2"
                 shift 2 ;;

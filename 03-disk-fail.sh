@@ -43,7 +43,7 @@ while (( i < ${#CHAOS_REMAINING_ARGS[@]} )); do
 done
 
 if [[ "${MODE_CHECK}" == true ]]; then
-    nemesis_disk_check "${CHECK_HOST}" "${DEVICE}"
+    chaos_run_checks nemesis_disk_check "${DEVICE}"
     exit 0
 fi
 

@@ -44,7 +44,7 @@ if [[ -z "${BURST}" ]]; then
 fi
 
 if [[ "${MODE_CHECK}" == true ]]; then
-    nemesis_tc_check "${CHECK_HOST}"
+    chaos_run_checks nemesis_tc_check
     exit 0
 fi
 

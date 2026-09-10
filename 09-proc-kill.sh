@@ -38,15 +38,7 @@ i=0; while (( i < ${#CHAOS_REMAINING_ARGS[@]} )); do
 done
 
 if [[ "${MODE_CHECK}" == true ]]; then
-    if [[ "${SCOPE_SINGLE}" == true || "${SCOPE_DC}" == true || "${SCOPE_DC_ALT}" == true ]]; then
-        chaos_resolve_targets
-        _h=""
-        for _h in "${TARGET_HOSTS[@]}"; do
-            nemesis_proc_check "${_h}"
-        done
-    else
-        nemesis_proc_check "${CHECK_HOST}"
-    fi
+    chaos_run_checks nemesis_proc_check
     exit 0
 fi
 

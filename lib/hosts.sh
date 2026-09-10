@@ -19,10 +19,10 @@ chaos_resolve_targets() {
         TARGET_HOSTS=("${NODE_HOST}")
         SCOPE_LABEL="node"
     elif [[ "${SCOPE_DC}" == true ]]; then
-        TARGET_HOSTS=("${DC_HOSTS[@]}")
+        TARGET_HOSTS=(${DC_HOSTS[@]+"${DC_HOSTS[@]}"})
         SCOPE_LABEL="dc"
     elif [[ "${SCOPE_DC_ALT}" == true ]]; then
-        TARGET_HOSTS=("${DC_ALT_HOSTS[@]}")
+        TARGET_HOSTS=(${DC_ALT_HOSTS[@]+"${DC_ALT_HOSTS[@]}"})
         SCOPE_LABEL="dc_alt"
     fi
 }
@@ -62,6 +62,19 @@ chaos_resolve_teardown_targets() {
         return 1
     fi
     return 0
+}
+
+chaos_resolve_check_targets() {
+    chaos_resolve_targets
+    if [[ -z "${TARGET_HOSTS[*]:-}" ]]; then
+        if [[ "${SCOPE_SINGLE}" == true || "${SCOPE_DC}" == true || "${SCOPE_DC_ALT}" == true ]]; then
+            echo 'Выбранная группа --check не содержит хостов' >&2
+            return 1
+        fi
+        [[ -n "${CHECK_HOST:-}" ]] || { echo 'Не задан хост для --check' >&2; return 1; }
+        TARGET_HOSTS=("${CHECK_HOST}")
+        SCOPE_LABEL=node
+    fi
 }
 
 # Краткое описание целей для chaos_term_target.
