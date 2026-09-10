@@ -63,27 +63,14 @@ tc filter show dev eth0
 
 ## Автоматическое снятие по таймауту
 
-По истечении `-t` скрипт запускает на хосте фоновый таймер снятия qdisc:
-
-```bash
-nohup bash -c "sleep 1200 && sudo tc qdisc del dev eth0 root 2>/dev/null && rm -f /tmp/tc-chaos.pid" \
-    >/dev/null 2>&1 &
-echo $! > /tmp/tc-chaos.pid
-```
-
-Процесс живёт независимо от SSH-сессии. Даже если скрипт упадёт или соединение
-оборвётся — потеря будет снята по истечении таймаута.
+Удаленный скрипт запускает таймер до изменения qdisc. Таймер хранит идентификатор
+операции и снимает только принадлежащие ей интерфейсы. После снятия таймер проверяет
+состояние через `tc qdisc show`.
 
 ## Досрочное снятие (-D)
 
-```bash
-# Остановить фоновый таймер и немедленно снять qdisc
-if [ -f /tmp/tc-chaos.pid ]; then
-    kill $(cat /tmp/tc-chaos.pid) 2>/dev/null || true
-    rm -f /tmp/tc-chaos.pid
-fi
-sudo tc qdisc del dev eth0 root
-```
+`./05-net-loss.sh -D --operation ID` снимает конкретную операцию. Команда без
+`--operation` выполняет ручное снятие на настроенных интерфейсах.
 
 ## Проверка статуса (-C)
 
@@ -94,16 +81,8 @@ sudo tc qdisc del dev eth0 root
 
 Вывод (пример):
 ```
-node-a.example.net (eth0)  chaos: ACTIVE   loss=2%
-
-RTT → 2001:db8::1 (node-b.example.net):19001  (10 проб)
-   0.41 ms  |##
-   1.53 ms  |########
-   avg: 0.97 ms
+resource=tc:eth0 state=active operation=0123456789abcdef0123456789abcdef
 ```
-
-Для наблюдения потерь пакетов лучше использовать `ping` с большим числом проб или
-мониторинг метрик YDB, так как hping3 показывает RTT, а не процент потерь напрямую.
 
 ## Команды для ручного применения
 

@@ -57,6 +57,7 @@ DEFAULT_CPU_PERCENT=90
 # Сетевые стеки для tc и iptables (true/false).
 CHAOS_NET_IPV4="${CHAOS_NET_IPV4:-true}"
 CHAOS_NET_IPV6="${CHAOS_NET_IPV6:-false}"
+CHAOS_TC_STATE_DIR="${CHAOS_TC_STATE_DIR:-/var/lib/chaos-md}"
 
 # Базовый список интерфейсов, если для хоста нет строки в NET_IFACES_TABLE.
 NET_IFACE="eth0"

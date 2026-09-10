@@ -37,13 +37,26 @@ chaos_run_checks() {
 chaos_run_window() {
     local short="$1" apply_fn="$2" teardown_fn="$3"
 
-    "${apply_fn}" "${TARGET_HOSTS[@]}"
+    if ! "${apply_fn}" "${TARGET_HOSTS[@]}"; then
+        log "Применение хаоса завершилось ошибкой. Выполняется компенсация."
+        "${teardown_fn}" "${TARGET_HOSTS[@]}" || log "Компенсация после ошибки применения тоже завершилась ошибкой."
+        chaos_json_emit teardown command_failed 1 "${short}  apply failed; compensation attempted"
+        return 1
+    fi
     log_tl "CHAOS_START" "${short}  scope=${SCOPE_LABEL}  hosts=${#TARGET_HOSTS[@]}  timeout=${TIMEOUT}s"
 
     log_wait_sec "${TIMEOUT}"
-    chaos_wait_with_timer "${TIMEOUT}" "${short}  ${SCOPE_LABEL}=${#TARGET_HOSTS[@]}h"
+    if ! chaos_wait_with_timer "${TIMEOUT}" "${short}  ${SCOPE_LABEL}=${#TARGET_HOSTS[@]}h"; then
+        log "Ожидание завершилось досрочно. Хаос снимается."
+        "${teardown_fn}" "${TARGET_HOSTS[@]}" || log "Снятие после досрочного завершения тоже завершилось ошибкой."
+        chaos_json_emit teardown command_failed 1 "${short}  wait interrupted; teardown attempted"
+        return 1
+    fi
 
-    "${teardown_fn}" "${TARGET_HOSTS[@]}"
+    if ! "${teardown_fn}" "${TARGET_HOSTS[@]}"; then
+        chaos_json_emit teardown command_failed 1 "${short}  teardown failed"
+        return 1
+    fi
     chaos_json_emit teardown command_succeeded null "${short}  scope=${SCOPE_LABEL}  hosts=${#TARGET_HOSTS[@]}"
     log_tl "CHAOS_END  " "${short}  scope=${SCOPE_LABEL}  hosts=${#TARGET_HOSTS[@]}"
 }

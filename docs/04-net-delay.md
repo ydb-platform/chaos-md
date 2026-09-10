@@ -72,14 +72,11 @@ tc filter show dev eth0
 
 ## Автоматическое снятие по таймауту
 
-```bash
-nohup bash -c "sleep 1200 && sudo tc qdisc del dev eth0 root 2>/dev/null && rm -f /tmp/tc-chaos.pid" \
-    >/dev/null 2>&1 &
-echo $! > /tmp/tc-chaos.pid
-```
-
-Процесс живёт независимо от SSH-сессии. Даже если скрипт упадёт или соединение
-оборвётся — задержка будет снята по истечении таймаута.
+`nemesis/tc-remote.sh` записывает владельца интерфейса в `/var/lib/chaos-md`.
+Скрипт запускает таймер до изменения qdisc. Таймер после ожидания сверяет
+идентификатор владельца, снимает только qdisc своей операции и проверяет результат.
+Таймер продолжает работу после разрыва SSH-соединения, но не переживает перезагрузку
+ноды.
 
 ## Досрочное снятие (-D)
 
@@ -87,19 +84,10 @@ echo $! > /tmp/tc-chaos.pid
 ./04-net-delay.sh -D
 ```
 
-Или вручную:
-```bash
-if [ -f /tmp/tc-chaos.pid ]; then
-    kill $(cat /tmp/tc-chaos.pid) 2>/dev/null || true
-    rm -f /tmp/tc-chaos.pid
-fi
-sudo tc qdisc del dev eth0 root
-```
+Флаг `--operation` адресует исходную операцию. Без явного идентификатора команда
+снимает qdisc на интерфейсах, которые заданы для выбранных хостов.
 
 ## Проверка применённой задержки (-C)
-
-Для корректного измерения hping3 запускается с **source port = 19001** (`-s 19001`),
-чтобы исходящие SYN-пакеты проходили через фильтр prio 1 → класс 1:1.
 
 ```bash
 ./04-net-delay.sh -C
@@ -108,12 +96,7 @@ sudo tc qdisc del dev eth0 root
 
 Вывод (пример):
 ```
-node-a.example.net (eth0)  chaos: ACTIVE   [netem/sport 19001] delay 50ms
-
-RTT → 2001:db8::1 (node-b.example.net):19001  sport=19001  (10 проб)
-  51.41 ms  |#################################################
-  50.53 ms  |################################################
-   avg: 50.97 ms
+resource=tc:eth0 state=active operation=0123456789abcdef0123456789abcdef
 ```
 
 ### Команда на хосте

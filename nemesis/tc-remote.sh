@@ -1,0 +1,433 @@
+#!/usr/bin/env bash
+
+set -euo pipefail
+umask 077
+
+fail() {
+    echo "tc operation: $*" >&2
+    exit 1
+}
+
+valid_operation() {
+    [[ "${1:-}" =~ ^[0-9a-f]{32}$ ]]
+}
+
+valid_state_root() {
+    [[ "${1:-}" =~ ^/[A-Za-z0-9._/-]+$ ]]
+}
+
+valid_iface() {
+    [[ "${1:-}" =~ ^[A-Za-z0-9_.:-]+$ ]]
+}
+
+valid_ifaces() {
+    [[ "${1:-}" != ,* && "${1:-}" != *, && "${1:-}" != *,,* ]] || return 1
+    local iface seen=""
+    local values=()
+    IFS=',' read -r -a values <<< "${1:-}"
+    ((${#values[@]} > 0)) || return 1
+    for iface in "${values[@]}"; do
+        valid_iface "${iface}" || return 1
+        [[ ",${seen}," != *",${iface},"* ]] || return 1
+        seen="${seen:+${seen},}${iface}"
+    done
+}
+
+read_owner() {
+    local file="$1" value=""
+    [[ -f "${file}" ]] || return 1
+    IFS= read -r value < "${file}" || true
+    valid_operation "${value}" || return 1
+    printf '%s' "${value}"
+}
+
+write_value() {
+    local file="$1" value="$2" tmp
+    tmp="${file}.tmp.$$"
+    printf '%s\n' "${value}" > "${tmp}"
+    mv -f "${tmp}" "${file}"
+}
+
+emit_state() {
+    printf 'resource=tc:%s state=%s operation=%s\n' "$1" "$2" "$3"
+}
+
+qdisc_is_active() {
+    local iface="$1" mode="$2" output
+    output="$(tc qdisc show dev "${iface}")" || return 2
+    case "${mode}" in
+        netem)
+            grep -Eq 'qdisc prio 1:.* root' <<< "${output}" &&
+                grep -Eq 'qdisc netem 10:.* parent 1:1' <<< "${output}"
+            ;;
+        tbf)
+            grep -Eq 'qdisc tbf .* root' <<< "${output}"
+            ;;
+        *) return 2 ;;
+    esac
+}
+
+qdisc_is_clean() {
+    local iface="$1" output
+    output="$(tc qdisc show dev "${iface}")" || return 2
+    ! grep -Eq 'qdisc (prio 1:.* root|tbf .* root|netem 10:.* parent 1:1)' <<< "${output}"
+}
+
+write_recovery_script() {
+    local file="$1"
+    cat > "${file}" <<'RECOVER'
+#!/usr/bin/env bash
+set -euo pipefail
+umask 077
+
+operation="$1"
+state_root="$2"
+delay="$3"
+op_dir="${state_root}/operations/${operation}"
+printf '%s\n' ready > "${op_dir}/timer.ready"
+sleep "${delay}"
+
+exec 9> "${state_root}/lock"
+flock -x 9
+
+resources="${op_dir}/resources"
+failed=0
+[[ -f "${resources}" ]] || exit 0
+
+while IFS= read -r iface || [[ -n "${iface}" ]]; do
+    [[ "${iface}" =~ ^[A-Za-z0-9_.:-]+$ ]] || { failed=1; continue; }
+    owner_file="${state_root}/owners/tc.${iface}"
+    owner=""
+    if [[ -f "${owner_file}" ]]; then
+        IFS= read -r owner < "${owner_file}" || true
+        [[ "${owner}" =~ ^[0-9a-f]{32}$ ]] || { failed=1; continue; }
+    fi
+    [[ "${owner}" == "${operation}" ]] || continue
+    tc qdisc del dev "${iface}" root >/dev/null 2>&1 || true
+    output="$(tc qdisc show dev "${iface}")" || { failed=1; continue; }
+    if grep -Eq 'qdisc (prio 1:.* root|tbf .* root|netem 10:.* parent 1:1)' <<< "${output}"; then
+        failed=1
+        continue
+    fi
+    current=""
+    [[ -f "${owner_file}" ]] && IFS= read -r current < "${owner_file}" || true
+    [[ "${current}" == "${operation}" ]] && rm -f "${owner_file}"
+done < "${resources}"
+
+if ((failed)); then
+    printf '%s\n' cleanup_failed > "${op_dir}/phase"
+    exit 1
+fi
+printf '%s\n' expired > "${op_dir}/phase"
+RECOVER
+    chmod 700 "${file}"
+}
+
+cleanup_owned() {
+    local operation="$1" resources="$2" final_phase="$3"
+    local iface owner_file owner failed=0
+    [[ -f "${resources}" ]] || return 0
+    while IFS= read -r iface || [[ -n "${iface}" ]]; do
+        valid_iface "${iface}" || { failed=1; continue; }
+        owner_file="${STATE_ROOT}/owners/tc.${iface}"
+        if [[ -e "${owner_file}" ]]; then
+            owner="$(read_owner "${owner_file}" 2>/dev/null)" || {
+                emit_state "${iface}" cleanup_failed "${operation}"
+                failed=1
+                continue
+            }
+        else
+            owner=""
+        fi
+        [[ "${owner}" == "${operation}" ]] || continue
+        tc qdisc del dev "${iface}" root >/dev/null 2>&1 || true
+        if qdisc_is_clean "${iface}"; then
+            owner="$(read_owner "${owner_file}" 2>/dev/null || true)"
+            [[ "${owner}" == "${operation}" ]] && rm -f "${owner_file}"
+            emit_state "${iface}" clean "${operation}"
+        else
+            emit_state "${iface}" cleanup_failed "${operation}"
+            failed=1
+        fi
+    done < "${resources}"
+    if ((failed)); then
+        write_value "${STATE_ROOT}/operations/${operation}/phase" cleanup_failed
+        return 1
+    fi
+    write_value "${STATE_ROOT}/operations/${operation}/phase" "${final_phase}"
+}
+
+reserve_resources() {
+    local operation="$1" resources="$2" iface owner_file owner
+    while IFS= read -r iface || [[ -n "${iface}" ]]; do
+        owner_file="${STATE_ROOT}/owners/tc.${iface}"
+        if [[ -e "${owner_file}" ]]; then
+            owner="$(read_owner "${owner_file}" 2>/dev/null)" || {
+                emit_state "${iface}" invalid_owner "${operation}"
+                return 1
+            }
+        else
+            owner=""
+        fi
+        if [[ -n "${owner}" && "${owner}" != "${operation}" ]]; then
+            emit_state "${iface}" conflict "${owner}"
+            return 1
+        fi
+    done < "${resources}"
+    while IFS= read -r iface || [[ -n "${iface}" ]]; do
+        write_value "${STATE_ROOT}/owners/tc.${iface}" "${operation}"
+    done < "${resources}"
+}
+
+apply_netem_iface() {
+    local iface="$1" ports="$2" stacks="$3" params="$4" port hex
+    local port_values=()
+    tc qdisc replace dev "${iface}" root handle 1: prio
+    tc qdisc replace dev "${iface}" parent 1:1 handle 10: netem ${params} limit 262144
+    if [[ "${stacks}" == *4* ]]; then
+        tc filter add dev "${iface}" protocol ip parent 1:0 prio 3 u32 match ip src 0.0.0.0/0 flowid 1:2
+        IFS=',' read -r -a port_values <<< "${ports}"
+        for port in "${port_values[@]}"; do
+            tc filter add dev "${iface}" protocol ip parent 1:0 prio 2 u32 match ip sport "${port}" 0xffff flowid 1:1
+            tc filter add dev "${iface}" protocol ip parent 1:0 prio 2 u32 match ip dport "${port}" 0xffff flowid 1:1
+        done
+    fi
+    if [[ "${stacks}" == *6* ]]; then
+        for hex in '0x0 0xffff' '0x1 0xffff' '0x2 0xfffe' '0x4 0xfffc' '0x8 0xfff8' \
+            '0x10 0xfff0' '0x20 0xffe0' '0x40 0xffc0' '0x80 0xff80' \
+            '0x100 0xff00' '0x200 0xfe00' '0x400 0xfc00' '0x800 0xf800' \
+            '0x1000 0xf000' '0x2000 0xe000' '0x4000 0xc000' '0x8000 0x8000'; do
+            tc filter add dev "${iface}" protocol ipv6 parent 1:0 prio 3 u32 match ip6 sport ${hex} flowid 1:2
+        done
+        IFS=',' read -r -a port_values <<< "${ports}"
+        for port in "${port_values[@]}"; do
+            printf -v hex '0x%x' "${port}"
+            tc filter add dev "${iface}" protocol ipv6 parent 1:0 prio 2 u32 match ip6 sport "${hex}" 0xffff flowid 1:1
+            tc filter add dev "${iface}" protocol ipv6 parent 1:0 prio 2 u32 match ip6 dport "${hex}" 0xffff flowid 1:1
+        done
+    fi
+    tc qdisc replace dev "${iface}" parent 1:2 handle 20: netem delay 0ms limit 262144
+}
+
+apply_operation() {
+    local action="$1" operation="$2" timeout_s="$3" ifaces="$4" config="$5"
+    shift 5
+    local op_dir resources iface owner mode timer_pid timer_ready failed=0
+    op_dir="${STATE_ROOT}/operations/${operation}"
+    resources="${op_dir}/resources"
+    mode="${action#apply-}"
+
+    valid_operation "${operation}" || fail 'invalid operation'
+    [[ "${timeout_s}" =~ ^[1-9][0-9]*$ ]] || fail 'invalid timeout'
+    valid_ifaces "${ifaces}" || fail 'invalid interfaces'
+    mkdir -p "${op_dir}"
+    [[ ! -L "${op_dir}" ]] || fail 'operation path is a symlink'
+
+    [[ ! -e "${op_dir}/cancelled" ]] || fail 'operation was cancelled'
+    if [[ -f "${op_dir}/config" && "$(cat "${op_dir}/config")" != "${config}" ]]; then
+        fail 'operation configuration changed'
+    fi
+    write_value "${op_dir}/config" "${config}"
+    tr ',' '\n' <<< "${ifaces}" > "${resources}.tmp.$$"
+    mv -f "${resources}.tmp.$$" "${resources}"
+
+    if [[ -f "${op_dir}/phase" && "$(cat "${op_dir}/phase")" == active ]]; then
+        failed=0
+        while IFS= read -r iface || [[ -n "${iface}" ]]; do
+            owner="$(read_owner "${STATE_ROOT}/owners/tc.${iface}" 2>/dev/null || true)"
+            [[ "${owner}" == "${operation}" ]] && qdisc_is_active "${iface}" "${mode}" || failed=1
+        done < "${resources}"
+        if ((failed == 0)); then
+            while IFS= read -r iface || [[ -n "${iface}" ]]; do
+                emit_state "${iface}" active "${operation}"
+            done < "${resources}"
+            return 0
+        fi
+        cleanup_owned "${operation}" "${resources}" retry_required || fail 'inconsistent previous apply could not be cleaned'
+        fail 'inconsistent previous apply was cleaned; use a new operation'
+    elif [[ -f "${op_dir}/phase" ]]; then
+        cleanup_owned "${operation}" "${resources}" retry_required || fail 'incomplete previous apply could not be cleaned'
+        fail 'incomplete previous apply was cleaned; use a new operation'
+    fi
+
+    write_recovery_script "${op_dir}/recover.sh"
+    bash -n "${op_dir}/recover.sh" || fail 'recovery timer script is invalid'
+    rm -f "${op_dir}/timer.ready"
+    write_value "${op_dir}/phase" armed
+    nohup "${op_dir}/recover.sh" "${operation}" "${STATE_ROOT}" "${timeout_s}" </dev/null >/dev/null 2>&1 &
+    timer_pid=$!
+    write_value "${op_dir}/timer.pid" "${timer_pid}"
+    timer_ready=false
+    for _ in {1..100}; do
+        if [[ -f "${op_dir}/timer.ready" ]]; then
+            timer_ready=true
+            break
+        fi
+        kill -0 "${timer_pid}" 2>/dev/null || break
+        sleep 0.02
+    done
+    [[ "${timer_ready}" == true ]] || {
+        cleanup_owned "${operation}" "${resources}" timer_failed || true
+        fail 'recovery timer did not become ready'
+    }
+
+    reserve_resources "${operation}" "${resources}" || fail 'resource is owned by another operation'
+
+    write_value "${op_dir}/phase" applying
+    while IFS= read -r iface || [[ -n "${iface}" ]]; do
+        if [[ "${action}" == apply-netem ]]; then
+            apply_netem_iface "${iface}" "$@" || { failed=1; break; }
+        else
+            tc qdisc replace dev "${iface}" root tbf rate "$1"mbit burst "$2" latency 50ms || { failed=1; break; }
+        fi
+        qdisc_is_active "${iface}" "${mode}" || { failed=1; break; }
+    done < "${resources}"
+
+    if ((failed)); then
+        cleanup_owned "${operation}" "${resources}" apply_failed || true
+        fail 'apply failed and compensation was attempted'
+    fi
+    write_value "${op_dir}/phase" active
+    while IFS= read -r iface || [[ -n "${iface}" ]]; do
+        emit_state "${iface}" active "${operation}"
+    done < "${resources}"
+}
+
+ACTION="${1:-}"
+shift || true
+
+case "${ACTION}" in
+    apply-netem)
+        (($# == 7)) || fail 'apply-netem expects 7 arguments'
+        OPERATION="$1"; STATE_ROOT="$2"; TIMEOUT_S="$3"; IFACES="$4"
+        PORTS="$5"; STACKS="$6"; PARAMS="$7"
+        [[ "${PORTS}" =~ ^[0-9]+(,[0-9]+)*$ ]] || fail 'invalid ports'
+        [[ "${STACKS}" == 4 || "${STACKS}" == 6 || "${STACKS}" == 46 ]] || fail 'invalid stacks'
+        [[ "${PARAMS}" =~ ^delay\ [0-9]+([.][0-9]+)?ms$ || "${PARAMS}" =~ ^loss\ [0-9]+([.][0-9]+)?%$ ]] || fail 'invalid netem parameters'
+        CONFIG="netem|${IFACES}|${PORTS}|${STACKS}|${PARAMS}"
+        ;;
+    apply-tbf)
+        (($# == 6)) || fail 'apply-tbf expects 6 arguments'
+        OPERATION="$1"; STATE_ROOT="$2"; TIMEOUT_S="$3"; IFACES="$4"
+        RATE="$5"; BURST="$6"
+        [[ "${RATE}" =~ ^[1-9][0-9]*$ && "${BURST}" =~ ^[1-9][0-9]*$ ]] || fail 'invalid tbf parameters'
+        CONFIG="tbf|${IFACES}|${RATE}|${BURST}"
+        ;;
+    teardown)
+        (($# == 3)) || fail 'teardown expects 3 arguments'
+        OPERATION="$1"; STATE_ROOT="$2"; IFACES="$3"
+        valid_operation "${OPERATION}" || fail 'invalid operation'
+        valid_ifaces "${IFACES}" || fail 'invalid interfaces'
+        ;;
+    teardown-all)
+        (($# == 2)) || fail 'teardown-all expects 2 arguments'
+        STATE_ROOT="$1"; IFACES="$2"
+        valid_ifaces "${IFACES}" || fail 'invalid interfaces'
+        ;;
+    check)
+        (($# == 3)) || fail 'check expects 3 arguments'
+        OPERATION="$1"; STATE_ROOT="$2"; IFACES="$3"
+        [[ "${OPERATION}" == any ]] || valid_operation "${OPERATION}" || fail 'invalid operation'
+        valid_ifaces "${IFACES}" || fail 'invalid interfaces'
+        ;;
+    *) fail 'unknown action' ;;
+esac
+
+valid_state_root "${STATE_ROOT}" || fail 'invalid state root'
+command -v flock >/dev/null 2>&1 || fail 'flock is required'
+command -v nohup >/dev/null 2>&1 || fail 'nohup is required'
+command -v tc >/dev/null 2>&1 || fail 'tc is required'
+mkdir -p "${STATE_ROOT}/operations" "${STATE_ROOT}/owners"
+[[ ! -L "${STATE_ROOT}" && ! -L "${STATE_ROOT}/operations" && ! -L "${STATE_ROOT}/owners" ]] || fail 'state path is a symlink'
+exec 9> "${STATE_ROOT}/lock"
+flock -x 9
+
+case "${ACTION}" in
+    apply-netem)
+        apply_operation "${ACTION}" "${OPERATION}" "${TIMEOUT_S}" "${IFACES}" "${CONFIG}" "${PORTS}" "${STACKS}" "${PARAMS}"
+        ;;
+    apply-tbf)
+        apply_operation "${ACTION}" "${OPERATION}" "${TIMEOUT_S}" "${IFACES}" "${CONFIG}" "${RATE}" "${BURST}"
+        ;;
+    teardown)
+        OP_DIR="${STATE_ROOT}/operations/${OPERATION}"
+        mkdir -p "${OP_DIR}"
+        [[ ! -L "${OP_DIR}" ]] || fail 'operation path is a symlink'
+        : > "${OP_DIR}/cancelled"
+        if [[ ! -f "${OP_DIR}/resources" ]]; then
+            tr ',' '\n' <<< "${IFACES}" > "${OP_DIR}/resources"
+        fi
+        cleanup_owned "${OPERATION}" "${OP_DIR}/resources" cancelled
+        ;;
+    teardown-all)
+        IFS=',' read -r -a TEARDOWN_IFACES <<< "${IFACES}"
+        TEARDOWN_FAILED=0
+        for IFACE in "${TEARDOWN_IFACES[@]}"; do
+            OWNER_FILE="${STATE_ROOT}/owners/tc.${IFACE}"
+            OWNER="$(read_owner "${OWNER_FILE}" 2>/dev/null || true)"
+            if [[ -n "${OWNER}" ]]; then
+                OWNER_DIR="${STATE_ROOT}/operations/${OWNER}"
+                mkdir -p "${OWNER_DIR}"
+                : > "${OWNER_DIR}/cancelled"
+                write_value "${OWNER_DIR}/phase" cancelling
+            fi
+            tc qdisc del dev "${IFACE}" root >/dev/null 2>&1 || true
+            if qdisc_is_clean "${IFACE}"; then
+                rm -f "${OWNER_FILE}"
+                emit_state "${IFACE}" clean "${OWNER:-manual}"
+            else
+                emit_state "${IFACE}" cleanup_failed "${OWNER:-manual}"
+                TEARDOWN_FAILED=1
+            fi
+        done
+        ((TEARDOWN_FAILED == 0)) || exit 1
+        ;;
+    check)
+        IFS=',' read -r -a CHECK_IFACES <<< "${IFACES}"
+        CHECK_FAILED=0
+        for IFACE in "${CHECK_IFACES[@]}"; do
+            OWNER_FILE="${STATE_ROOT}/owners/tc.${IFACE}"
+            if [[ -e "${OWNER_FILE}" ]]; then
+                OWNER="$(read_owner "${OWNER_FILE}" 2>/dev/null)" || {
+                    emit_state "${IFACE}" invalid_owner unknown
+                    CHECK_FAILED=1
+                    continue
+                }
+            else
+                OWNER=""
+            fi
+            EXPECTED="${OPERATION}"
+            [[ "${EXPECTED}" == any ]] && EXPECTED="${OWNER}"
+            MODE=""
+            if [[ -n "${OWNER}" && -f "${STATE_ROOT}/operations/${OWNER}/config" ]]; then
+                IFS='|' read -r MODE _ < "${STATE_ROOT}/operations/${OWNER}/config" || true
+            fi
+            if [[ -n "${EXPECTED}" && -z "${OWNER}" ]]; then
+                PHASE=""
+                [[ -f "${STATE_ROOT}/operations/${EXPECTED}/phase" ]] && IFS= read -r PHASE < "${STATE_ROOT}/operations/${EXPECTED}/phase" || true
+                if [[ "${PHASE}" == cancelled || "${PHASE}" == expired ]] && qdisc_is_clean "${IFACE}"; then
+                    emit_state "${IFACE}" clean "${EXPECTED}"
+                else
+                    emit_state "${IFACE}" conflict none
+                    CHECK_FAILED=1
+                fi
+            elif [[ -n "${EXPECTED}" && "${OWNER}" != "${EXPECTED}" ]]; then
+                emit_state "${IFACE}" conflict "${OWNER}"
+                CHECK_FAILED=1
+            elif [[ -n "${OWNER}" && ( "${MODE}" == netem || "${MODE}" == tbf ) ]]; then
+                if qdisc_is_active "${IFACE}" "${MODE}"; then
+                    emit_state "${IFACE}" active "${OWNER}"
+                else
+                    emit_state "${IFACE}" check_failed "${OWNER}"
+                    CHECK_FAILED=1
+                fi
+            elif qdisc_is_clean "${IFACE}"; then
+                emit_state "${IFACE}" clean "${OWNER:-none}"
+            else
+                emit_state "${IFACE}" unowned_active "${OWNER:-none}"
+                CHECK_FAILED=1
+            fi
+        done
+        ((CHECK_FAILED == 0)) || exit 1
+        ;;
+esac
