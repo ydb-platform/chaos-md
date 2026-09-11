@@ -75,12 +75,37 @@ chaos_json_emit() {
         "$(chaos_json_escape "${message}")" >&3
 }
 
+chaos_capability_features() {
+    local features=(explicit-hosts operation-id command-frames resource-observations)
+    local family="${CHAOS_RESOURCE_EVIDENCE_FAMILY:-}"
+    if [[ -n "${family}" ]]; then
+        if [[ ! "${family}" =~ ^[a-z0-9]+(-[a-z0-9]+)*$ ]]; then
+            echo "Некорректное семейство доказательств ресурсов: ${family}" >&2
+            return 1
+        fi
+        features+=("resource-observations-${family}")
+    fi
+    printf '%s\n' "${features[@]}"
+}
+
+chaos_capability_features_text() {
+    local feature feature_lines output=""
+    feature_lines="$(chaos_capability_features)" || return 1
+    while IFS= read -r feature; do
+        [[ -z "${output}" ]] || output+=" "
+        output+="${feature}"
+    done <<< "${feature_lines}"
+    printf '%s' "${output}"
+}
+
 chaos_json_emit_capabilities() {
     [[ "${MODE_JSON:-false}" == true ]] || return 0
-    local timestamp
+    local timestamp feature feature_lines features=()
     timestamp="$(date -u '+%Y-%m-%dT%H:%M:%SZ')"
-    printf '{"schemaVersion":3,"kind":"capabilities","contract":"chaos-md-shell","features":["explicit-hosts","operation-id","command-frames","resource-observations"],"timestamp":"%s"}\n' \
-        "${timestamp}" >&3
+    feature_lines="$(chaos_capability_features)" || return 1
+    while IFS= read -r feature; do features+=("${feature}"); done <<< "${feature_lines}"
+    printf '{"schemaVersion":3,"kind":"capabilities","contract":"chaos-md-shell","features":%s,"timestamp":"%s"}\n' \
+        "$(chaos_json_array "${features[@]}")" "${timestamp}" >&3
 }
 
 chaos_json_emit_observation() {

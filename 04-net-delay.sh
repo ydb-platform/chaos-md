@@ -4,6 +4,7 @@
 set -euo pipefail
 TEST_NAME="04-net-delay"
 TEST_SCOPE="either"
+CHAOS_RESOURCE_EVIDENCE_FAMILY="tc"
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "${SCRIPT_DIR}/lib/init.sh"

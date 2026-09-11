@@ -45,12 +45,14 @@ chaos_parse_common() {
     for arg in "$@"; do
         if [[ "${arg}" == --capabilities ]]; then
             if [[ "${MODE_JSON}" == true ]]; then
-                chaos_json_emit_capabilities
+                chaos_json_emit_capabilities || exit $?
                 CHAOS_JSON_TERMINAL_EMITTED=true
             else
+                local capability_features
+                capability_features="$(chaos_capability_features_text)" || exit $?
                 printf '%s\n' \
                     'Chaos MD shell contract 3' \
-                    'Features: explicit-hosts operation-id command-frames resource-observations'
+                    "Features: ${capability_features}"
             fi
             exit 0
         fi

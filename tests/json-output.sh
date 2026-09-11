@@ -56,12 +56,58 @@ jq -e '.schemaVersion == 3 and .kind == "capabilities"
     and .features == ["explicit-hosts", "operation-id", "command-frames", "resource-observations"]
     and (.timestamp | type == "string")' <<< "${capabilities}" >/dev/null
 
+tc_capabilities="$(${BASH:-bash} -c '
+    TEST_NAME=sample
+    TEST_SCOPE=single
+    CHAOS_RESOURCE_EVIDENCE_FAMILY=tc
+    SINGLE_HOST=node-a
+    DC_HOSTS=()
+    DC_ALT_HOSTS=()
+    source "$1/lib/operation.sh"
+    source "$1/lib/json.sh"
+    source "$1/lib/cli.sh"
+    chaos_parse_common --json --capabilities
+' _ "${ROOT}" 2>/dev/null)"
+jq -e '.features == [
+    "explicit-hosts", "operation-id", "command-frames", "resource-observations",
+    "resource-observations-tc"
+]' <<< "${tc_capabilities}" >/dev/null
+
+if ${BASH:-bash} -c '
+    TEST_NAME=sample
+    TEST_SCOPE=single
+    CHAOS_RESOURCE_EVIDENCE_FAMILY="invalid family"
+    SINGLE_HOST=node-a
+    DC_HOSTS=()
+    DC_ALT_HOSTS=()
+    source "$1/lib/operation.sh"
+    source "$1/lib/json.sh"
+    source "$1/lib/cli.sh"
+    chaos_parse_common --json --capabilities
+' _ "${ROOT}" >/dev/null 2>&1; then
+    echo "invalid resource evidence family was accepted" >&2
+    exit 1
+fi
+
 readable="$(${BASH:-bash} -c '
     TEST_NAME=sample; TEST_SCOPE=single; SINGLE_HOST=node-a; DC_HOSTS=(); DC_ALT_HOSTS=()
     source "$1/lib/operation.sh"; source "$1/lib/json.sh"; source "$1/lib/cli.sh"
     chaos_parse_common --capabilities
 ' _ "${ROOT}")"
 grep -Fq 'Chaos MD shell contract 3' <<< "${readable}"
+
+tc_readable="$(${BASH:-bash} -c '
+    TEST_NAME=sample; TEST_SCOPE=single; CHAOS_RESOURCE_EVIDENCE_FAMILY=tc
+    SINGLE_HOST=node-a; DC_HOSTS=(); DC_ALT_HOSTS=()
+    source "$1/lib/operation.sh"; source "$1/lib/json.sh"; source "$1/lib/cli.sh"
+    chaos_parse_common --capabilities
+' _ "${ROOT}")"
+grep -Fq 'resource-observations-tc' <<< "${tc_readable}"
+
+numbered_tc="$("${ROOT}/04-net-delay.sh" --json --capabilities 2>/dev/null)"
+jq -e '.features | index("resource-observations-tc") != null' <<< "${numbered_tc}" >/dev/null
+numbered_iptables="$("${ROOT}/06-net-drop.sh" --json --capabilities 2>/dev/null)"
+jq -e '.features | index("resource-observations-iptables") == null' <<< "${numbered_iptables}" >/dev/null
 
 observation="$(${BASH:-bash} -c '
     TEST_NAME=sample
