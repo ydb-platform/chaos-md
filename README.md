@@ -35,6 +35,7 @@ Chaos MD — набор инструментов для проведения у�
 │   ├── tc.sh           — Linux tc: netem + tbf (04, 05, 07)
 │   ├── tc-remote.sh    — удалённый жизненный цикл tc и аварийное снятие
 │   ├── iptables.sh     — iptables/ip6tables (06, 11)
+│   ├── iptables-remote.sh — удалённое владение цепочками и аварийное снятие
 │   ├── disk.sh         — sysfs disk remove (03)
 │   ├── proc.sh         — сигналы ydbd (08, 09)
 │   └── systemd.sh      — systemctl: stop/restart + rolling upgrade (10, 12)
@@ -46,7 +47,7 @@ Chaos MD — набор инструментов для проведения у�
 ├── build.sh                             # упаковка релизного архива в dist/
 ├── run-all.sh                           # последовательный прогон всех тестов (headless)
 ├── rolling-restart.sh                   # плановый роллинг-рестарт кластера
-├── prepare-hosts.sh                     # подготовка нод: iptables-цепочка, hping3, gdisk, blade
+├── prepare-hosts.sh                     # подготовка нод: hping3, gdisk, blade
 ├── setup-blade.sh                       # установка ChaosBlade на ноды
 ├── set-net-delay.sh                     # задержка на весь трафик iface (без привязки к портам)
 ├── all-forwards.sh                      # SSH port-forwarding к Grafana и ноде кластера
@@ -112,7 +113,7 @@ cp env.example.sh env-stand.sh
 | `YDB_MON_PD_PORT` | Порт мониторинга узла хранения (pdisks/vdisks в Grafana; см. `grafana/README.md`) |
 | `CHAOS_NET_IPV4`, `CHAOS_NET_IPV6` | Включение стеков для tc (04,05,07) и iptables (06,11) |
 | `CHAOS_TC_STATE_DIR` | Каталог состояния операций tc на ноде (по умолчанию `/var/lib/chaos-md`) |
-| `CHAOS_IPTABLES_CHAIN` | Цепочка iptables для 06/11 (по умолчанию `YDB_CHAOS_FW`) |
+| `CHAOS_IPTABLES_CHAIN` | Префикс цепочек операций 06/11 (по умолчанию `YDB_CHAOS_FW`) |
 | `NET_IFACES`, `NET_IFACES_TABLE` | Список сетевых интерфейсов; таблица «шаблон хоста → список iface» |
 | `CHAOS_BLADE_CPU_LOAD_TEMPLATE` и др. | Шаблоны команд ChaosBlade с плейсхолдерами `@CPU_PERCENT@` и т.д. |
 | `GRAFANA_URL`, `GRAFANA_TOKEN` | Опционально: аннотации хаос-окон в Grafana |
@@ -174,7 +175,7 @@ scope-флаги; без scope используется аргумент `--chec
 |---------|-------|---------------|
 | **blade** | 01, 02 | Встроенный `--timeout` в ChaosBlade; `-D` → `blade destroy` |
 | **tc** | 04, 05, 07 | Таймер восстановления на ноде и адресный teardown по идентификатору операции |
-| **iptables** | 06, 11 | Фоновый teardown по таймеру и явный сброс цепочки по `-t` / `-D` |
+| **iptables** | 06, 11 | Таймер восстановления на ноде и адресное удаление цепочки операции |
 | **disk** | 03 | Фоновый таймер возврата метки + опц. рестарт storage |
 | **proc** | 08 | Фоновый `SIGCONT` по `-t`; `-D` — немедленный CONT |
 | **proc** | 09 | SIGKILL необратим; `-D` = `systemctl restart` storage |
@@ -204,6 +205,14 @@ root qdisc. Другой root qdisc требует отдельного адап
 операции, команда сообщает конфликт и сохраняет ее воздействие. Тест
 `tests/tc-operation.sh` использует настоящий `flock`, если он установлен; без него
 тест явно сообщает о пропуске проверки наследования блокировки.
+
+Для iptables каждый запуск создаёт отдельную цепочку из префикса
+`CHAOS_IPTABLES_CHAIN` и идентификатора операции. Скрипт запускает таймер до
+создания цепочки. Явное снятие и таймер удаляют только вызовы и цепочку своей
+операции. Скрипт проверяет владельца, число правил и отсутствие цепочки после
+снятия. Ошибка одного сетевого стека запускает компенсацию на всех затронутых
+стеках. Для работы нужны `bash`, `flock`, `nohup`, `timeout`, `iptables` и, когда
+включён IPv6, `ip6tables`.
 
 Таймер переживает разрыв SSH-соединения, но не перезагрузку ноды. Состояние на
 диске позволяет проверить владельца после загрузки, однако автоматический
@@ -292,7 +301,7 @@ Lines схемы 3. Кадры `kind=command` передают стадии ко
 
 ### `prepare-hosts.sh`
 
-Подготовка нод к тестам (один раз на стенд): установка цепочки iptables, `hping3`, `gdisk`/`sgdisk`, симлинк `~/blade` из tar.gz, копирование архива rolling upgrade. Флаг `-h` — полный список действий.
+Подготовка нод к тестам: установка `hping3`, `gdisk`/`sgdisk` и `iptables`, создание симлинка `~/blade` из tar.gz и копирование архива rolling upgrade. Флаг `-h` показывает полный список действий.
 
 ### `sync-to-remote.sh`
 
@@ -306,7 +315,7 @@ SSH port-forwarding туннели к стенду: Grafana и YDB monitoring po
 
 - Без `-1`/`-4`/`-A` основной сценарий не стартует (предохранитель).
 - `-t` — длительность фазы (секунды); `-D` — досрочное снятие.
-- **`prepare-hosts.sh`** — один раз на стенд (iptables-цепочка для 06/11, пакеты, blade).
+- **`prepare-hosts.sh`** — подготавливает пакеты, blade и архив rolling upgrade.
 - Логи: `logs/<имя>.log`; события для Grafana: `logs/timeline.log`.
 - SSH — без пароля, `BatchMode`. `~/blade` на нодах обязателен для тестов 01 и 02.
 

@@ -3,7 +3,6 @@
 # Вызывать с машины, откуда есть SSH до CLUSTER_HOSTS (как у тестов).
 #
 # По умолчанию хосты обрабатываются по одному (наглядные логи); см. --parallel.
-#   • iptables/ip6tables: пользовательская цепочка CHAOS_IPTABLES_CHAIN и вызов из INPUT/OUTPUT;
 #   • пакеты: hping3, gdisk (sgdisk), iproute2/ss (tc), iptables (если есть в репозитории);
 #   • ChaosBlade: архив в ~/dist/, распаковка, симлинк ~/blade -> …/chaosblade-*/blade;
 #   • дистрибутив для теста 10 (rolling upgrade): копия в ~/ как у 10-rolling-upgrade.sh.
@@ -17,7 +16,6 @@ TEST_NAME="prepare-hosts"
 
 PREP_NO_BLADE=false
 PREP_NO_PKGS=false
-PREP_NO_IPT=false
 PREP_NO_UPGRADE_DIST=false
 PREP_PARALLEL=false
 BLADE_FILE_OVERRIDE=""
@@ -33,7 +31,6 @@ usage() {
 Опции:
   --no-blade          Не ставить ChaosBlade
   --no-packages       Не ставить пакеты (hping3, gdisk, iproute2, …)
-  --no-iptables       Не создавать цепочку iptables
   --no-upgrade-dist   Не копировать архив ydbd для теста 10 на хосты
   --parallel          Готовить хосты параллельно (по умолчанию — по одному, нагляднее в логе)
   -f, --file PATH     Архив ChaosBlade (по умолчанию: dist/ или корень репозитория)
@@ -53,7 +50,6 @@ while [[ $# -gt 0 ]]; do
     case "$1" in
         --no-blade)        PREP_NO_BLADE=true; shift ;;
         --no-packages)     PREP_NO_PKGS=true; shift ;;
-        --no-iptables)     PREP_NO_IPT=true; shift ;;
         --no-upgrade-dist) PREP_NO_UPGRADE_DIST=true; shift ;;
         --parallel)       PREP_PARALLEL=true; shift ;;
         -f|--file)        BLADE_FILE_OVERRIDE="$2"; shift 2 ;;
@@ -66,8 +62,6 @@ done
 
 # shellcheck source=lib/init.sh
 source "${SCRIPT_DIR}/lib/init.sh"
-# shellcheck source=nemesis/iptables.sh
-source "${SCRIPT_DIR}/nemesis/iptables.sh"
 # shellcheck source=lib/blade_install.sh
 source "${SCRIPT_DIR}/lib/blade_install.sh"
 
@@ -111,14 +105,6 @@ fi
 
 UPGRADE_DIST_LOCAL="${PREP_UPGRADE_FILE_OVERRIDE:-${ROLLING_UPGRADE_DIST:-${SCRIPT_DIR}/dist/ydbd-package.tar.xz}}"
 UPGRADE_DIST_NAME="$(basename "${UPGRADE_DIST_LOCAL}")"
-
-_prepare_iptables_chain() {
-    local host="$1"
-    local script
-    script="$(nemesis_iptables_prepare_chain_remote_script)"
-    log "[${host}] iptables: цепочка $(_chaos_iptables_chain)"
-    ssh "${SSH_OPTS[@]}" "${host}" "bash -s" <<<"${script}"
-}
 
 _prepare_packages() {
     local host="$1"
@@ -180,7 +166,6 @@ _prepare_upgrade_dist() {
 _prepare_one_host() {
     local host="$1"
     log_section "${host}"
-    [[ "${PREP_NO_IPT}" == false ]] && _prepare_iptables_chain "${host}"
     [[ "${PREP_NO_PKGS}" == false ]] && _prepare_packages "${host}"
     [[ "${PREP_NO_BLADE}" == false ]] && _prepare_blade "${host}"
     [[ "${PREP_NO_UPGRADE_DIST}" == false ]] && _prepare_upgrade_dist "${host}"
@@ -190,7 +175,7 @@ _prepare_one_host() {
 log_section "prepare-hosts: ${#PREP_HOSTS[@]} хостов"
 log "Хосты: ${PREP_HOSTS[*]}"
 log "Режим: $([[ "${PREP_PARALLEL}" == true ]] && echo параллельно || echo последовательно)"
-log "Цепочка iptables: $(_chaos_iptables_chain)  no_ipt=${PREP_NO_IPT} no_pkg=${PREP_NO_PKGS} no_blade=${PREP_NO_BLADE} no_upg=${PREP_NO_UPGRADE_DIST}"
+log "Опции: no_pkg=${PREP_NO_PKGS} no_blade=${PREP_NO_BLADE} no_upg=${PREP_NO_UPGRADE_DIST}"
 log "Blade архив: ${BLADE_LOCAL}"
 log "Rolling dist: ${UPGRADE_DIST_LOCAL}"
 

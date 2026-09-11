@@ -1,152 +1,88 @@
 #!/usr/bin/env bash
-# Немезис: iptables/ip6tables — блокировка YDB-интерконнекта.
-# Используется в тестах 06 (одна нода) и 11 (весь ДЦ).
-#
-# CHAOS_NET_IPV4 / CHAOS_NET_IPV6 — какие стеки трогать (env).
-# CHAOS_IPTABLES_CHAIN — имя пользовательской цепочки (по умолчанию YDB_CHAOS_FW).
-# Интерфейсы: NET_IFACES / NET_IFACES_TABLE — все NIC с межнодевым трафиком перечислить в env
-# (через запятую в строке таблицы или массив NET_IFACES). На каждый порт YDB и iface — 4 правила TCP:
-#   INPUT  -i iface --dport / --sport;  OUTPUT -o iface --sport / --dport
-# (и то же в ip6tables при CHAOS_NET_IPV6).
-#
-# Базовый API:
-#   nemesis_iptables_prepare_chain_remote_script   # скрипт: создать цепочку + вызовы INPUT/OUTPUT
-#   nemesis_iptables_apply    <host> <REJECT|DROP>
-#   nemesis_iptables_teardown <host> <REJECT|DROP>
-#   nemesis_iptables_check    <host>
 
-_chaos_iptables_chain() {
-    printf '%s' "${CHAOS_IPTABLES_CHAIN:-YDB_CHAOS_FW}"
+CHAOS_IPTABLES_STATE_DIR="${CHAOS_IPTABLES_STATE_DIR:-/var/lib/chaos-md}"
+
+_chaos_iptables_chain_prefix() {
+    local prefix="${CHAOS_IPTABLES_CHAIN:-YDB_CHAOS_FW}"
+    [[ "${prefix}" =~ ^[A-Za-z0-9_-]+$ ]] || return 1
+    prefix="${prefix:0:10}"
+    while [[ "${prefix}" == *_ || "${prefix}" == *- ]]; do prefix="${prefix%?}"; done
+    [[ -n "${prefix}" ]] || return 1
+    printf '%s' "${prefix}"
 }
 
-_iptables_jrule() {
-    case "${1:-REJECT}" in
-        DROP) echo "-j DROP" ;;
-        *)    echo "-j REJECT --reject-with tcp-reset" ;;
-    esac
+_chaos_iptables_operation_chain() {
+    local operation="$1" prefix
+    prefix="$(_chaos_iptables_chain_prefix)" || return 1
+    printf '%s_%s' "${prefix}" "${operation:0:16}"
 }
 
-# Идемпотентно: создать цепочку и вставить вызов в начало INPUT/OUTPUT (IPv4/IPv6 по флагам env).
-nemesis_iptables_prepare_chain_remote_script() {
-    local c
-    c="$(_chaos_iptables_chain)"
-    local rb=""
-    rb+="set -euo pipefail"$'\n'
-    rb+="# Цепочка ${c}, вызов из INPUT/OUTPUT"$'\n'
-
-    if chaos_net_ipv4_enabled; then
-        rb+="sudo iptables -w 2 -N ${c} 2>/dev/null || true"$'\n'
-        rb+="sudo iptables -w 2 -C INPUT -j ${c} 2>/dev/null || sudo iptables -w 2 -I INPUT 1 -j ${c}"$'\n'
-        rb+="sudo iptables -w 2 -C OUTPUT -j ${c} 2>/dev/null || sudo iptables -w 2 -I OUTPUT 1 -j ${c}"$'\n'
-    fi
-    if chaos_net_ipv6_enabled; then
-        rb+="sudo ip6tables -w 2 -N ${c} 2>/dev/null || true"$'\n'
-        rb+="sudo ip6tables -w 2 -C INPUT -j ${c} 2>/dev/null || sudo ip6tables -w 2 -I INPUT 1 -j ${c}"$'\n'
-        rb+="sudo ip6tables -w 2 -C OUTPUT -j ${c} 2>/dev/null || sudo ip6tables -w 2 -I OUTPUT 1 -j ${c}"$'\n'
-    fi
-    printf '%s' "${rb}"
-}
-
-_nemesis_iptables_remote_script() {
-    local target="$1" timeout_s="${2:-0}"
-    local jrule c
-    jrule="$(_iptables_jrule "${target}")"
-    c="$(_chaos_iptables_chain)"
-
-    chaos_ydb_ports_to_array
-
-    local rb=""
-    rb+="$(nemesis_iptables_prepare_chain_remote_script)"$'\n'
-    rb+="# Правила по интерфейсам и стекам (IPv4 затем IPv6)"$'\n'
-
-    local iface p
-    for iface in "${CHAOS_NET_IFACES_ARR[@]}"; do
-        rb+=""$'\n'
-        rb+="echo '[iptables-chaos] iface=${iface} chain=${c}'"$'\n'
-
-        if chaos_net_ipv4_enabled; then
-            rb+="# IPv4: INPUT dport/sport + OUTPUT sport/dport"$'\n'
-            for p in "${CHAOS_YDB_PORTS_ARR[@]}"; do
-                rb+="sudo iptables -w 2 -A ${c} -p tcp -m tcp -i ${iface} --dport ${p} ${jrule}"$'\n'
-                rb+="sudo iptables -w 2 -A ${c} -p tcp -m tcp -i ${iface} --sport ${p} ${jrule}"$'\n'
-                rb+="sudo iptables -w 2 -A ${c} -p tcp -m tcp -o ${iface} --sport ${p} ${jrule}"$'\n'
-                rb+="sudo iptables -w 2 -A ${c} -p tcp -m tcp -o ${iface} --dport ${p} ${jrule}"$'\n'
-            done
-        fi
-
-        if chaos_net_ipv6_enabled; then
-            rb+="# IPv6: INPUT dport/sport + OUTPUT sport/dport"$'\n'
-            for p in "${CHAOS_YDB_PORTS_ARR[@]}"; do
-                rb+="sudo ip6tables -w 2 -A ${c} -p tcp -m tcp -i ${iface} --dport ${p} ${jrule}"$'\n'
-                rb+="sudo ip6tables -w 2 -A ${c} -p tcp -m tcp -i ${iface} --sport ${p} ${jrule}"$'\n'
-                rb+="sudo ip6tables -w 2 -A ${c} -p tcp -m tcp -o ${iface} --sport ${p} ${jrule}"$'\n'
-                rb+="sudo ip6tables -w 2 -A ${c} -p tcp -m tcp -o ${iface} --dport ${p} ${jrule}"$'\n'
-            done
-        fi
+_nemesis_iptables_run_remote() {
+    local host="$1" action="$2"
+    shift 2
+    local remote_cmd arg output line rc=0
+    printf -v remote_cmd 'sudo bash -s -- %q' "${action}"
+    for arg in "$@"; do
+        printf -v remote_cmd '%s %q' "${remote_cmd}" "${arg}"
     done
-
-    # Host-side safety-таймер снимает iptables-изоляцию независимо от управляющего процесса.
-    if [[ "${timeout_s}" -gt 0 ]]; then
-        rb+=""$'\n'
-        rb+="# Safety-таймер: auto-teardown через ${timeout_s}s"$'\n'
-        rb+="nohup bash -c 'sleep ${timeout_s}; sudo iptables -w 2 -F ${c} 2>/dev/null || true; sudo ip6tables -w 2 -F ${c} 2>/dev/null || true' >/dev/null 2>&1 &"$'\n'
-        rb+="echo \"[iptables-chaos] safety-timer ${timeout_s}s pid=\$!\""$'\n'
-    fi
-
-    printf '%s' "${rb}"
+    output="$(ssh "${SSH_OPTS[@]}" "${host}" "${remote_cmd}" < "${CHAOS_REPO_DIR}/nemesis/iptables-remote.sh")" || rc=$?
+    while IFS= read -r line || [[ -n "${line}" ]]; do
+        [[ -n "${line}" ]] || continue
+        if [[ "${line}" =~ ^observation\ operation=([0-9a-f]{32})\ resource=(iptables:[0-9a-f]{32})\ state=(active|clean|check_failed|unreachable)\ boot_id=([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\ revision=([0-9]+)\ recovery_armed=(true|false)\ cancelled=(true|false)\ code=([A-Za-z0-9_.:-]+)$ ]]; then
+            [[ "${BASH_REMATCH[1]}" == "${CHAOS_OPERATION_ID}" ]] || return 1
+            printf '%s %s %s recovery=%s cancelled=%s code=%s\n' \
+                "${host}" "${BASH_REMATCH[2]}" "${BASH_REMATCH[3]}" \
+                "${BASH_REMATCH[6]}" "${BASH_REMATCH[7]}" "${BASH_REMATCH[8]}"
+            chaos_json_emit_observation "${host}" "${BASH_REMATCH[2]}" "${BASH_REMATCH[3]}" \
+                "${BASH_REMATCH[4]}" "${BASH_REMATCH[5]}" "${BASH_REMATCH[6]}" \
+                "${BASH_REMATCH[7]}" "${BASH_REMATCH[8]}"
+        else
+            echo "Некорректное наблюдение iptables от ${host}: ${line}" >&2
+            return 1
+        fi
+    done <<< "${output}"
+    return "${rc}"
 }
 
 nemesis_iptables_apply() {
     local host="$1" target="$2" timeout_s="${3:-${TIMEOUT:-0}}"
+    local chain ports_csv ifaces_csv stacks=""
     chaos_net_require_any_stack || return 1
     chaos_net_ifaces_for_host "${host}"
     chaos_ydb_ports_to_array
+    chain="$(_chaos_iptables_operation_chain "${CHAOS_OPERATION_ID}")" || return 1
+    ports_csv="${CHAOS_YDB_PORTS_ARR[*]}"; ports_csv="${ports_csv// /,}"
+    ifaces_csv="${CHAOS_NET_IFACES_ARR[*]}"; ifaces_csv="${ifaces_csv// /,}"
+    chaos_net_ipv4_enabled && stacks+="4"
+    chaos_net_ipv6_enabled && stacks+="6"
 
-    local ports_csv="${CHAOS_YDB_PORTS_ARR[*]}"
-    ports_csv="${ports_csv// /,}"
-    local ifcsv="${CHAOS_NET_IFACES_ARR[*]}"
-    ifcsv="${ifcsv// /,}"
-    local stacks=""
-    chaos_net_ipv4_enabled && stacks+="IPv4 "
-    chaos_net_ipv6_enabled && stacks+="IPv6 "
-    stacks="${stacks%% }"
-
-    local c
-    c="$(_chaos_iptables_chain)"
-
-    log_chaos_apply "iptables/ip6tables ${target} ports=${ports_csv} на ${host} ifaces=[${ifcsv}] stacks=[${stacks}] timeout=${timeout_s}s (цепочка ${c})"
-    chaos_term_remote_cmd "ssh ${host}  ${c} ${target} tcp ${ports_csv} ifaces=${ifcsv}"
-
-    local remote_script
-    remote_script="$(_nemesis_iptables_remote_script "${target}" "${timeout_s}")"
-
-    chaos_log_remote_script "Удалённый скрипт iptables, хост ${host}" "${remote_script}"
-
-    ssh "${SSH_OPTS[@]}" "${host}" "bash -s" <<< "${remote_script}"
+    log_chaos_apply "iptables ${target} на ${host} chain=${chain} ifaces=[${ifaces_csv}] timeout=${timeout_s}s"
+    chaos_term_remote_cmd "ssh ${host}  iptables operation=${CHAOS_OPERATION_ID} chain=${chain}"
+    _nemesis_iptables_run_remote "${host}" apply "${CHAOS_OPERATION_ID}" \
+        "${CHAOS_IPTABLES_STATE_DIR}" "${timeout_s}" "${chain}" "${target}" \
+        "${ifaces_csv}" "${ports_csv}" "${stacks}"
 }
 
 nemesis_iptables_teardown() {
-    local host="$1"
-    local c
-    c="$(_chaos_iptables_chain)"
-    chaos_term_remote_cmd "ssh ${host}  iptables/ip6tables -F ${c} (сброс цепочки)"
-    local rb=$'sudo iptables  -w 2 -F '"${c}"$' 2>/dev/null || true\nsudo ip6tables -w 2 -F '"${c}"$' 2>/dev/null || true\n'
-    chaos_log_remote_script "Удалённый скрипт iptables teardown, хост ${host}" "${rb}"
-    ssh "${SSH_OPTS[@]}" "${host}" "bash -s" <<<"${rb}"
+    local host="$1" chain
+    chain="$(_chaos_iptables_operation_chain "${CHAOS_OPERATION_ID}")" || return 1
+    chaos_term_remote_cmd "ssh ${host}  iptables teardown operation=${CHAOS_OPERATION_ID}"
+    if [[ "${MODE_TEARDOWN:-false}" == true && "${CHAOS_OPERATION_EXPLICIT:-false}" != true ]]; then
+        _nemesis_iptables_run_remote "${host}" teardown-all "${CHAOS_OPERATION_ID}" "${CHAOS_IPTABLES_STATE_DIR}"
+    else
+        _nemesis_iptables_run_remote "${host}" teardown "${CHAOS_OPERATION_ID}" "${CHAOS_IPTABLES_STATE_DIR}" "${chain}"
+    fi
 }
 
 nemesis_iptables_check() {
-    local host="$1"
-    local c
-    c="$(_chaos_iptables_chain)"
-    chaos_term_remote_cmd "ssh ${host}  iptables-save | grep ${c}"
-    # shellcheck disable=SC2087
-    ssh "${SSH_OPTS[@]}" "${host}" "bash -s" <<REMOTE
-echo "=== ip6tables (${c}) ==="
-sudo ip6tables-save 2>/dev/null | grep -E '${c}|:${c}' || true
-echo "=== iptables (${c}) ==="
-sudo iptables-save 2>/dev/null | grep -E '${c}|:${c}' || true
-REMOTE
+    local host="$1" operation=any chain=""
+    if [[ "${CHAOS_OPERATION_EXPLICIT:-false}" == true ]]; then
+        operation="${CHAOS_OPERATION_ID}"
+        chain="$(_chaos_iptables_operation_chain "${operation}")" || return 1
+    fi
+    chaos_term_remote_cmd "ssh ${host}  iptables operation check"
+    _nemesis_iptables_run_remote "${host}" check "${CHAOS_OPERATION_ID}" "${operation}" \
+        "${CHAOS_IPTABLES_STATE_DIR}" "${chain}"
 }
 
 nemesis_iptables_apply_all() {
@@ -156,7 +92,6 @@ nemesis_iptables_apply_all() {
 }
 
 nemesis_iptables_teardown_all() {
-    local target="${IPT_TARGET:-REJECT}"
-    log "Снятие iptables ${target} с ${#@} хостов"
-    parallel_for_hosts nemesis_iptables_teardown "$@" -- "${target}"
+    log "Снятие iptables с ${#@} хостов"
+    parallel_for_hosts nemesis_iptables_teardown "$@" || return $?
 }

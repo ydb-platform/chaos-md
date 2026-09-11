@@ -107,7 +107,9 @@ grep -Fq 'resource-observations-tc' <<< "${tc_readable}"
 numbered_tc="$("${ROOT}/04-net-delay.sh" --json --capabilities 2>/dev/null)"
 jq -e '.features | index("resource-observations-tc") != null' <<< "${numbered_tc}" >/dev/null
 numbered_iptables="$("${ROOT}/06-net-drop.sh" --json --capabilities 2>/dev/null)"
-jq -e '.features | index("resource-observations-iptables") == null' <<< "${numbered_iptables}" >/dev/null
+jq -e '.features | index("resource-observations-iptables") != null' <<< "${numbered_iptables}" >/dev/null
+numbered_process="$("${ROOT}/08-proc-freeze.sh" --json --capabilities 2>/dev/null)"
+jq -e '.features | index("resource-observations-process") == null' <<< "${numbered_process}" >/dev/null
 
 observation="$(${BASH:-bash} -c '
     TEST_NAME=sample

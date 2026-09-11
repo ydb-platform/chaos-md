@@ -30,9 +30,7 @@ SSH (порт 22) и прочий трафик вне `YDB_PORTS` не затр�
 
 ## Цепочка и правила
 
-**Подготовка (один раз):** `prepare-hosts.sh` создаёт пользовательскую цепочку **`CHAOS_IPTABLES_CHAIN`** (по умолчанию `YDB_CHAOS_FW`) и вставляет jump в начало INPUT/OUTPUT (IPv4 и, при `CHAOS_NET_IPV6=true`, IPv6).
-
-**Применение:** на каждый порт из `YDB_PORTS` (после раскрытия диапазонов) и каждый iface — **четыре** правила в эту цепочку:
+**Применение:** скрипт создаёт отдельную цепочку для идентификатора операции. `CHAOS_IPTABLES_CHAIN` задаёт префикс имени. Скрипт добавляет вызовы этой цепочки в INPUT и OUTPUT. На каждый порт из `YDB_PORTS` и каждый iface скрипт добавляет четыре правила:
 
 | Направление | Match | Смысл |
 |-------------|-------|--------|
@@ -44,21 +42,23 @@ SSH (порт 22) и прочий трафик вне `YDB_PORTS` не затр�
 Пример для одного порта **19001** и iface **eth0** (режим REJECT):
 
 ```bash
-sudo iptables -A YDB_CHAOS_FW -p tcp -i eth0 --dport 19001 -j REJECT --reject-with tcp-reset
-sudo iptables -A YDB_CHAOS_FW -p tcp -i eth0 --sport 19001 -j REJECT --reject-with tcp-reset
-sudo iptables -A YDB_CHAOS_FW -p tcp -o eth0 --sport 19001 -j REJECT --reject-with tcp-reset
-sudo iptables -A YDB_CHAOS_FW -p tcp -o eth0 --dport 19001 -j REJECT --reject-with tcp-reset
+sudo iptables -A YDB_CHAOS_<operation> -p tcp -i eth0 --dport 19001 -j REJECT --reject-with tcp-reset
+sudo iptables -A YDB_CHAOS_<operation> -p tcp -i eth0 --sport 19001 -j REJECT --reject-with tcp-reset
+sudo iptables -A YDB_CHAOS_<operation> -p tcp -o eth0 --sport 19001 -j REJECT --reject-with tcp-reset
+sudo iptables -A YDB_CHAOS_<operation> -p tcp -o eth0 --dport 19001 -j REJECT --reject-with tcp-reset
 ```
 
 С `--drop` вместо `REJECT …` — `-j DROP`. Повторяется для всех портов из `YDB_PORTS` и всех iface; при IPv6 — те же правила через `ip6tables`.
 
 ## Снятие
 
-Скрипт сбрасывает **всю цепочку** (`iptables -F YDB_CHAOS_FW`), а не удаляет правила по одному:
+Скрипт удаляет вызовы из INPUT и OUTPUT. Затем скрипт очищает и удаляет цепочку операции:
 
 ```bash
-sudo iptables  -F YDB_CHAOS_FW
-sudo ip6tables -F YDB_CHAOS_FW
+sudo iptables -D INPUT -j YDB_CHAOS_<operation>
+sudo iptables -D OUTPUT -j YDB_CHAOS_<operation>
+sudo iptables -F YDB_CHAOS_<operation>
+sudo iptables -X YDB_CHAOS_<operation>
 ```
 
 ## Проверка
@@ -71,15 +71,15 @@ sudo ip6tables -F YDB_CHAOS_FW
 Или на ноде:
 
 ```bash
-sudo iptables-save  | grep YDB_CHAOS_FW
-sudo ip6tables-save | grep YDB_CHAOS_FW
+sudo iptables-save  | grep YDB_CHAOS
+sudo ip6tables-save | grep YDB_CHAOS
 ```
 
 ## Механика скрипта
 
-`chaos_run_window`: apply → локальное ожидание `-t` с тикером → явный teardown. **Фонового nohup на ноде нет** (в отличие от tc, disk, proc, systemd).
+`chaos_run_window`: apply → локальное ожидание `-t` с тикером → явный teardown. Перед изменением iptables удалённый скрипт вооружает независимый таймер. Таймер переживает разрыв управляющего процесса и удаляет только цепочку своей операции.
 
-`-D` — немедленный teardown без ожидания.
+`-D --operation ID` снимает указанную операцию. `-D` без идентификатора снимает все операции iptables, которые записаны в каталоге состояния.
 
 ## Параметры
 

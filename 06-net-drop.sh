@@ -4,6 +4,7 @@
 set -euo pipefail
 TEST_NAME="06-net-drop"
 TEST_SCOPE="single"
+CHAOS_RESOURCE_EVIDENCE_FAMILY="iptables"
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "${SCRIPT_DIR}/lib/init.sh"
