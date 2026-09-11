@@ -59,13 +59,50 @@ write_value() {
     mv -f "${tmp}" "${file}"
 }
 
+current_epoch() {
+    date +%s
+}
+
+valid_epoch() {
+    [[ "${1:-}" =~ ^[1-9][0-9]*$ ]]
+}
+
+process_identity() {
+    local pid="$1" value=""
+    if [[ -n "${CHAOS_TC_TEST_IDENTITY:-}" ]]; then
+        value="${CHAOS_TC_TEST_IDENTITY}:${pid}"
+    elif [[ -r "/proc/${pid}/stat" ]]; then
+        value="$(awk '{print $22}' "/proc/${pid}/stat" 2>/dev/null || true)"
+    else
+        value="$(ps -p "${pid}" -o lstart= 2>/dev/null || true)"
+    fi
+    [[ -n "${value}" ]] || return 1
+    printf '%s' "${value}"
+}
+
+timer_is_armed() {
+    local operation="$1" op_dir pid status expected_identity actual_identity
+    op_dir="${STATE_ROOT}/operations/${operation}"
+    [[ -f "${op_dir}/timer.ready" && -f "${op_dir}/timer.pid" \
+        && -f "${op_dir}/timer.identity" ]] || return 1
+    IFS= read -r pid < "${op_dir}/timer.pid" || true
+    [[ "${pid}" =~ ^[1-9][0-9]*$ ]] || return 1
+    kill -0 "${pid}" 2>/dev/null || return 1
+    IFS= read -r expected_identity < "${op_dir}/timer.identity" || true
+    actual_identity="$(process_identity "${pid}" 2>/dev/null || true)"
+    [[ -n "${expected_identity}" && "${actual_identity}" == "${expected_identity}" ]] || return 1
+    status=""
+    [[ -f "${op_dir}/timer.status" ]] && IFS= read -r status < "${op_dir}/timer.status" || true
+    [[ "${status}" == waiting || "${status}" == acquiring || "${status}" == cleaning ]] || return 1
+}
+
 emit_state() {
     local iface="$1" raw_state="$2" code="${3:-ok}" state recovery_armed=false cancelled=false
     case "${raw_state}" in
         active|clean) state="${raw_state}" ;;
         *) state=check_failed ;;
     esac
-    [[ "${state}" == active ]] && recovery_armed=true
+    [[ "${state}" == active ]] && timer_is_armed "${COMMAND_OPERATION}" && recovery_armed=true
     [[ "${ACTION}" == teardown || "${ACTION}" == teardown-all ]] && cancelled=true
     [[ -e "${STATE_ROOT}/operations/${COMMAND_OPERATION}/cancelled" ]] && cancelled=true
     printf 'observation operation=%s resource=tc:%s state=%s boot_id=%s revision=%s recovery_armed=%s cancelled=%s code=%s\n' \
@@ -73,8 +110,23 @@ emit_state() {
         "${recovery_armed}" "${cancelled}" "${code}"
 }
 
+COMMAND_DEADLINE_AT=0
+
+start_command_budget() {
+    local cap="${1:-25}" now
+    now="$(current_epoch)"
+    COMMAND_DEADLINE_AT=$((now + cap))
+}
+
 run_tc() {
-    "${TIMEOUT_BIN}" --signal=KILL 20s "${TC_BIN}" "$@"
+    local limit=20 now remaining
+    if ((COMMAND_DEADLINE_AT > 0)); then
+        now="$(current_epoch)"
+        remaining=$((COMMAND_DEADLINE_AT - now))
+        ((remaining > 0)) || return 124
+        if ((remaining < limit)); then limit="${remaining}"; fi
+    fi
+    "${TIMEOUT_BIN}" --signal=KILL "${limit}s" "${TC_BIN}" "$@"
 }
 
 next_host_revision() {
@@ -147,23 +199,51 @@ umask 077
 
 operation="$1"
 state_root="$2"
-delay="$3"
+expires_at="$3"
 op_dir="${state_root}/operations/${operation}"
+status_file="${op_dir}/timer.status"
+heartbeat_file="${op_dir}/timer.heartbeat"
+identity_file="${op_dir}/timer.identity"
+process_identity() {
+    local pid="$1" value=""
+    if [[ -n "${CHAOS_TC_TEST_IDENTITY:-}" ]]; then
+        value="${CHAOS_TC_TEST_IDENTITY}:${pid}"
+    elif [[ -r "/proc/${pid}/stat" ]]; then
+        value="$(awk '{print $22}' "/proc/${pid}/stat" 2>/dev/null || true)"
+    else
+        value="$(ps -p "${pid}" -o lstart= 2>/dev/null || true)"
+    fi
+    [[ -n "${value}" ]] || return 1
+    printf '%s' "${value}"
+}
+write_status() {
+    local value="$1" tmp
+    [[ -d "${op_dir}" ]] || exit 0
+    tmp="${status_file}.tmp.$$"
+    printf '%s\n' "${value}" > "${tmp}"
+    mv -f "${tmp}" "${status_file}"
+    date +%s > "${heartbeat_file}"
+}
+[[ "${expires_at}" =~ ^[1-9][0-9]*$ ]] || exit 1
+process_identity "$$" > "${identity_file}" || exit 1
+write_status waiting
 printf '%s\n' ready > "${op_dir}/timer.ready"
-sleep "${delay}"
+now="$(date +%s)"
+if ((expires_at > now)); then sleep "$((expires_at - now))"; fi
 
 exec 9> "${state_root}/lock"
-locked=false
-for _ in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20; do
-    if flock -w 5 -x 9; then locked=true; break; fi
-    sleep 1
-done
-[[ "${locked}" == true ]] || exit 1
-
 tc_bin="$(command -v tc)"
 timeout_bin="$(command -v timeout)"
-[[ -n "${tc_bin}" && -n "${timeout_bin}" ]] || exit 1
-run_tc() { "${timeout_bin}" --signal=KILL 20s "${tc_bin}" "$@"; }
+[[ -n "${tc_bin}" && -n "${timeout_bin}" ]] || { write_status cleanup_failed; exit 1; }
+attempt_deadline=0
+run_tc() {
+    local limit=20 now remaining
+    now="$(date +%s)"
+    remaining=$((attempt_deadline - now))
+    ((remaining > 0)) || return 124
+    if ((remaining < limit)); then limit="${remaining}"; fi
+    "${timeout_bin}" --signal=KILL "${limit}s" "${tc_bin}" "$@"
+}
 root_kind() {
     local text="$1" line
     while IFS= read -r line || [[ -n "${line}" ]]; do
@@ -176,43 +256,52 @@ root_kind() {
 }
 
 resources="${op_dir}/resources"
-failed=0
-[[ -f "${resources}" ]] || exit 0
-
-while IFS= read -r iface || [[ -n "${iface}" ]]; do
-    [[ "${iface}" =~ ^[A-Za-z0-9_.:-]+$ ]] || { failed=1; continue; }
-    owner_file="${state_root}/owners/tc.${iface}"
-    owner=""
-    if [[ -f "${owner_file}" ]]; then
-        IFS= read -r owner < "${owner_file}" || true
-        [[ "${owner}" =~ ^[0-9a-f]{32}$ ]] || { failed=1; continue; }
-    fi
-    [[ "${owner}" == "${operation}" ]] || continue
-    clean=false
-    baseline_file="${op_dir}/baseline.${iface}"
-    expected=""
-    [[ -f "${baseline_file}" ]] && IFS= read -r expected < "${baseline_file}" || true
-    for _ in 1 2 3; do
-        run_tc qdisc del dev "${iface}" root >/dev/null 2>&1 || true
-        output="$(run_tc qdisc show dev "${iface}")" || { sleep 1; continue; }
-        if ! grep -Eq 'qdisc (prio 1:.* root|tbf .* root|netem 10:.* parent 1:1)' <<< "${output}" \
-            && [[ -n "${expected}" && "$(root_kind "${output}")" == "${expected}" ]]; then
-            clean=true
-            break
+while [[ -d "${op_dir}" ]]; do
+    write_status acquiring
+    if ! flock -w 5 -x 9; then sleep 2; continue; fi
+    write_status cleaning
+    failed=0
+    attempt_deadline=$(($(date +%s) + 25))
+    [[ -f "${resources}" ]] || { flock -u 9; write_status cleanup_failed; sleep 2; continue; }
+    while IFS= read -r iface || [[ -n "${iface}" ]]; do
+        [[ "${iface}" =~ ^[A-Za-z0-9_.:-]+$ ]] || { failed=1; continue; }
+        owner_file="${state_root}/owners/tc.${iface}"
+        owner=""
+        if [[ -f "${owner_file}" ]]; then
+            IFS= read -r owner < "${owner_file}" || true
+            [[ "${owner}" =~ ^[0-9a-f]{32}$ ]] || { failed=1; continue; }
         fi
-        sleep 1
-    done
-    [[ "${clean}" == true ]] || { failed=1; continue; }
-    current=""
-    [[ -f "${owner_file}" ]] && IFS= read -r current < "${owner_file}" || true
-    [[ "${current}" == "${operation}" ]] && rm -f "${owner_file}"
-done < "${resources}"
-
-if ((failed)); then
+        [[ "${owner}" == "${operation}" ]] || continue
+        clean=false
+        baseline_file="${op_dir}/baseline.${iface}"
+        expected=""
+        [[ -f "${baseline_file}" ]] && IFS= read -r expected < "${baseline_file}" || true
+        for _ in 1 2 3; do
+            run_tc qdisc del dev "${iface}" root >/dev/null 2>&1 || true
+            output="$(run_tc qdisc show dev "${iface}")" || { sleep 1; continue; }
+            if ! grep -Eq 'qdisc (prio 1:.* root|tbf .* root|netem 10:.* parent 1:1)' <<< "${output}" \
+                && [[ -n "${expected}" && "$(root_kind "${output}")" == "${expected}" ]]; then
+                clean=true
+                break
+            fi
+            sleep 1
+        done
+        [[ "${clean}" == true ]] || { failed=1; continue; }
+        current=""
+        [[ -f "${owner_file}" ]] && IFS= read -r current < "${owner_file}" || true
+        [[ "${current}" == "${operation}" ]] && rm -f "${owner_file}"
+    done < "${resources}"
+    if ((failed == 0)); then
+        printf '%s\n' expired > "${op_dir}/phase"
+        flock -u 9
+        write_status expired
+        exit 0
+    fi
     printf '%s\n' cleanup_failed > "${op_dir}/phase"
-    exit 1
-fi
-printf '%s\n' expired > "${op_dir}/phase"
+    flock -u 9
+    write_status cleanup_failed
+    sleep 2
+done
 RECOVER
     chmod 700 "${file}"
 }
@@ -324,6 +413,7 @@ apply_operation() {
     local action="$1" operation="$2" timeout_s="$3" ifaces="$4" config="$5"
     shift 5
     local op_dir resources iface owner mode timer_pid timer_ready failed=0
+    local expires_at expiry_file now apply_deadline
     op_dir="${STATE_ROOT}/operations/${operation}"
     resources="${op_dir}/resources"
     mode="${action#apply-}"
@@ -342,7 +432,27 @@ apply_operation() {
     tr ',' '\n' <<< "${ifaces}" > "${resources}.tmp.$$"
     mv -f "${resources}.tmp.$$" "${resources}"
 
+    expiry_file="${op_dir}/expires_at"
+    if [[ -f "${expiry_file}" ]]; then
+        IFS= read -r expires_at < "${expiry_file}" || true
+        valid_epoch "${expires_at}" || fail 'invalid operation expiry'
+    else
+        now="$(current_epoch)"
+        expires_at=$((now + timeout_s))
+        write_value "${expiry_file}" "${expires_at}"
+    fi
+    now="$(current_epoch)"
+    ((now < expires_at)) || fail 'operation expired before apply'
+    apply_deadline=$((now + 25))
+    if ((expires_at < apply_deadline)); then apply_deadline="${expires_at}"; fi
+    COMMAND_DEADLINE_AT="${apply_deadline}"
+
     if [[ -f "${op_dir}/phase" && "$(cat "${op_dir}/phase")" == active ]]; then
+        if ! timer_is_armed "${operation}" || (( $(current_epoch) >= expires_at )); then
+            start_command_budget 25
+            cleanup_owned "${operation}" "${resources}" retry_required || fail 'expired operation could not be cleaned'
+            fail 'operation is no longer protected by its recovery timer'
+        fi
         failed=0
         while IFS= read -r iface || [[ -n "${iface}" ]]; do
             owner="$(read_owner "${STATE_ROOT}/owners/tc.${iface}" 2>/dev/null || true)"
@@ -354,9 +464,11 @@ apply_operation() {
             done < "${resources}"
             return 0
         fi
+        start_command_budget 25
         cleanup_owned "${operation}" "${resources}" retry_required || fail 'inconsistent previous apply could not be cleaned'
         fail 'inconsistent previous apply was cleaned; use a new operation'
     elif [[ -f "${op_dir}/phase" ]]; then
+        start_command_budget 25
         cleanup_owned "${operation}" "${resources}" retry_required || fail 'incomplete previous apply could not be cleaned'
         fail 'incomplete previous apply was cleaned; use a new operation'
     fi
@@ -367,7 +479,7 @@ apply_operation() {
     bash -n "${op_dir}/recover.sh" || fail 'recovery timer script is invalid'
     rm -f "${op_dir}/timer.ready"
     write_value "${op_dir}/phase" armed
-    nohup "${op_dir}/recover.sh" "${operation}" "${STATE_ROOT}" "${timeout_s}" 9>&- </dev/null >/dev/null 2>&1 &
+    nohup "${op_dir}/recover.sh" "${operation}" "${STATE_ROOT}" "${expires_at}" 9>&- </dev/null >/dev/null 2>&1 &
     timer_pid=$!
     write_value "${op_dir}/timer.pid" "${timer_pid}"
     timer_ready=false
@@ -380,14 +492,17 @@ apply_operation() {
         sleep 0.02
     done
     [[ "${timer_ready}" == true ]] || {
+        start_command_budget 25
         cleanup_owned "${operation}" "${resources}" timer_failed || true
         fail 'recovery timer did not become ready'
     }
 
+    (( $(current_epoch) < expires_at )) || fail 'operation expired before resource reservation'
     reserve_resources "${operation}" "${resources}" || fail 'resource is owned by another operation'
 
     write_value "${op_dir}/phase" applying
     while IFS= read -r iface || [[ -n "${iface}" ]]; do
+        (( $(current_epoch) < expires_at )) || { failed=1; break; }
         if [[ "${action}" == apply-netem ]]; then
             apply_netem_iface "${iface}" "$@" || { failed=1; break; }
         else
@@ -398,8 +513,15 @@ apply_operation() {
 
     if ((failed)); then
         : > "${op_dir}/cancelled"
+        start_command_budget 25
         cleanup_owned "${operation}" "${resources}" apply_failed || true
         fail 'apply failed and compensation was attempted'
+    fi
+    if (( $(current_epoch) >= expires_at )) || ! timer_is_armed "${operation}"; then
+        : > "${op_dir}/cancelled"
+        start_command_budget 25
+        cleanup_owned "${operation}" "${resources}" apply_failed || true
+        fail 'apply completed after expiry or without a live recovery timer'
     fi
     write_value "${op_dir}/phase" active
     while IFS= read -r iface || [[ -n "${iface}" ]]; do

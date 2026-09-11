@@ -70,6 +70,9 @@ case "${action}" in
         rm -f "${file}"
         ;;
     replace|add)
+        if [[ "${FAKE_TC_DELAY_IFACE:-}" == "${iface}" && " $* " == *" root "* ]]; then
+            sleep "${FAKE_TC_DELAY_SEC:-2}"
+        fi
         if [[ "${FAKE_TC_FAIL_IFACE:-}" == "${iface}" && " $* " == *" root "* ]]; then
             exit 42
         fi
@@ -92,10 +95,12 @@ export PATH="${TMP}/bin:${PATH}"
 export FAKE_TC_STATE="${TMP}/tc"
 export FAKE_TIMEOUT_LOG="${TMP}/timeout.log"
 export CHAOS_TC_BOOT_ID=aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee
+export CHAOS_TC_TEST_IDENTITY=test-process
 
 OP1=11111111111111111111111111111111
 OP2=22222222222222222222222222222222
 OP3=33333333333333333333333333333333
+OP4=44444444444444444444444444444444
 STATE="${TMP}/state"
 
 run_remote() {
@@ -143,6 +148,9 @@ assert_absent "${STATE}/owners/tc.eth1"
 rm -rf "${STATE}"
 run_remote apply-netem "${OP1}" "${STATE}" 30 eth0 2135 4 'loss 2%'
 TIMER_PID="$(cat "${STATE}/operations/${OP1}/timer.pid")"
+grep -Eq '^(waiting|acquiring|cleaning)$' "${STATE}/operations/${OP1}/timer.status"
+[[ "$(cat "${STATE}/operations/${OP1}/expires_at")" =~ ^[1-9][0-9]*$ ]]
+[[ -s "${STATE}/operations/${OP1}/timer.identity" ]]
 run_remote apply-netem "${OP1}" "${STATE}" 30 eth0 2135 4 'loss 2%' | grep -q 'state=active'
 [[ "$(cat "${STATE}/operations/${OP1}/timer.pid")" == "${TIMER_PID}" ]]
 RECOVER1="${STATE}/operations/${OP1}/recover.sh"
@@ -150,18 +158,26 @@ assert_present "${RECOVER1}"
 run_remote teardown "${OP1}" "${STATE}" eth0
 run_remote apply-tbf "${OP2}" "${STATE}" 30 eth0 10 1600
 run_remote check "${OP2}" "${OP2}" "${STATE}" eth0 | grep -q 'state=active'
-"${BASH}" "${RECOVER1}" "${OP1}" "${STATE}" 0
+kill "$(cat "${STATE}/operations/${OP2}/timer.pid")"
+if run_remote apply-tbf "${OP2}" "${STATE}" 30 eth0 10 1600; then
+    echo 'Операция без живого таймера была принята' >&2
+    exit 1
+fi
+assert_absent "${TMP}/tc/eth0"
+assert_absent "${STATE}/owners/tc.eth0"
+run_remote apply-tbf "${OP4}" "${STATE}" 30 eth0 10 1600
+"${BASH}" "${RECOVER1}" "${OP1}" "${STATE}" "$(date +%s)"
 if run_remote teardown "${OP1}" "${STATE}" eth0; then
     echo 'Снятие старой операции скрыло нового владельца' >&2
     exit 1
 fi
 grep -q 'qdisc tbf 8001: root' "${TMP}/tc/eth0"
-grep -q "${OP2}" "${STATE}/owners/tc.eth0"
-run_remote teardown "${OP2}" "${STATE}" eth0
-run_remote check "${OP2}" "${OP2}" "${STATE}" eth0 | grep -q 'state=clean'
+grep -q "${OP4}" "${STATE}/owners/tc.eth0"
+run_remote teardown "${OP4}" "${STATE}" eth0
+run_remote check "${OP4}" "${OP4}" "${STATE}" eth0 | grep -q 'state=clean'
 
 run_remote apply-tbf "${OP3}" "${STATE}" 30 eth0 10 1600
-"${BASH}" "${STATE}/operations/${OP3}/recover.sh" "${OP3}" "${STATE}" 0
+"${BASH}" "${STATE}/operations/${OP3}/recover.sh" "${OP3}" "${STATE}" "$(date +%s)"
 run_remote teardown "${OP3}" "${STATE}" eth0 | grep -q 'state=clean'
 rm -rf "${STATE}"
 
@@ -200,5 +216,18 @@ fi
 unset FAKE_FLOCK_FAIL
 assert_absent "${TMP}/tc/eth0"
 grep -q 'qdisc show dev eth0' "${FAKE_TIMEOUT_LOG}"
+
+rm -rf "${STATE}"
+export FAKE_TC_DELAY_IFACE=eth0
+export FAKE_TC_DELAY_SEC=2
+if run_remote apply-tbf "${OP1}" "${STATE}" 1 eth0,eth1 10 1600; then
+    echo 'Просроченное применение было принято' >&2
+    exit 1
+fi
+unset FAKE_TC_DELAY_IFACE FAKE_TC_DELAY_SEC
+assert_absent "${TMP}/tc/eth0"
+assert_absent "${TMP}/tc/eth1"
+assert_absent "${STATE}/owners/tc.eth0"
+assert_absent "${STATE}/owners/tc.eth1"
 
 echo 'tc operation tests: ok'
