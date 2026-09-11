@@ -219,7 +219,7 @@ RECOVER
 
 cleanup_owned() {
     local operation="$1" resources="$2" final_phase="$3"
-    local iface owner_file owner failed=0
+    local iface owner_file owner baseline_file failed=0
     [[ -f "${resources}" ]] || return 0
     while IFS= read -r iface || [[ -n "${iface}" ]]; do
         valid_iface "${iface}" || { failed=1; continue; }
@@ -233,7 +233,22 @@ cleanup_owned() {
         else
             owner=""
         fi
-        [[ "${owner}" == "${operation}" ]] || continue
+        if [[ -n "${owner}" && "${owner}" != "${operation}" ]]; then
+            emit_state "${iface}" check_failed owner_conflict
+            failed=1
+            continue
+        fi
+        baseline_file="${STATE_ROOT}/operations/${operation}/baseline.${iface}"
+        if [[ -z "${owner}" ]]; then
+            [[ -f "${baseline_file}" ]] || baseline_file=""
+            if qdisc_is_clean "${iface}" "${baseline_file}"; then
+                emit_state "${iface}" clean ok
+            else
+                emit_state "${iface}" check_failed unowned_qdisc_mismatch
+                failed=1
+            fi
+            continue
+        fi
         run_tc qdisc del dev "${iface}" root >/dev/null 2>&1 || true
         if qdisc_is_clean "${iface}" "${STATE_ROOT}/operations/${operation}/baseline.${iface}"; then
             owner="$(read_owner "${owner_file}" 2>/dev/null || true)"
@@ -352,7 +367,7 @@ apply_operation() {
     bash -n "${op_dir}/recover.sh" || fail 'recovery timer script is invalid'
     rm -f "${op_dir}/timer.ready"
     write_value "${op_dir}/phase" armed
-    nohup "${op_dir}/recover.sh" "${operation}" "${STATE_ROOT}" "${timeout_s}" </dev/null >/dev/null 2>&1 &
+    nohup "${op_dir}/recover.sh" "${operation}" "${STATE_ROOT}" "${timeout_s}" 9>&- </dev/null >/dev/null 2>&1 &
     timer_pid=$!
     write_value "${op_dir}/timer.pid" "${timer_pid}"
     timer_ready=false

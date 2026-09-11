@@ -9,9 +9,15 @@ trap 'rm -rf "${TMP}"' EXIT
 
 mkdir -p "${TMP}/bin" "${TMP}/tc"
 
+export CHAOS_TEST_FLOCK="$(command -v flock || true)"
+if [[ -z "${CHAOS_TEST_FLOCK}" ]]; then
+    echo 'SKIP real lock inheritance check: flock is unavailable' >&2
+fi
+
 cat > "${TMP}/bin/flock" <<'SH'
 #!/usr/bin/env bash
 [[ "${FAKE_FLOCK_FAIL:-false}" == true ]] && exit 1
+[[ -z "${CHAOS_TEST_FLOCK:-}" ]] || exec "${CHAOS_TEST_FLOCK}" "$@"
 exit 0
 SH
 
@@ -93,7 +99,7 @@ OP3=33333333333333333333333333333333
 STATE="${TMP}/state"
 
 run_remote() {
-    bash "${REMOTE}" "$@"
+    "${BASH}" "${REMOTE}" "$@"
 }
 
 assert_absent() {
@@ -120,6 +126,7 @@ fi
 grep -q 'qdisc prio 1: root' "${TMP}/tc/eth0"
 run_remote teardown "${OP1}" "${STATE}" eth0
 assert_absent "${TMP}/tc/eth0"
+run_remote teardown "${OP1}" "${STATE}" eth0 | grep -q 'state=clean'
 
 rm -rf "${STATE}"
 export FAKE_TC_FAIL_IFACE=eth1
@@ -143,11 +150,20 @@ assert_present "${RECOVER1}"
 run_remote teardown "${OP1}" "${STATE}" eth0
 run_remote apply-tbf "${OP2}" "${STATE}" 30 eth0 10 1600
 run_remote check "${OP2}" "${OP2}" "${STATE}" eth0 | grep -q 'state=active'
-bash "${RECOVER1}" "${OP1}" "${STATE}" 0
+"${BASH}" "${RECOVER1}" "${OP1}" "${STATE}" 0
+if run_remote teardown "${OP1}" "${STATE}" eth0; then
+    echo 'Снятие старой операции скрыло нового владельца' >&2
+    exit 1
+fi
 grep -q 'qdisc tbf 8001: root' "${TMP}/tc/eth0"
 grep -q "${OP2}" "${STATE}/owners/tc.eth0"
 run_remote teardown "${OP2}" "${STATE}" eth0
 run_remote check "${OP2}" "${OP2}" "${STATE}" eth0 | grep -q 'state=clean'
+
+run_remote apply-tbf "${OP3}" "${STATE}" 30 eth0 10 1600
+"${BASH}" "${STATE}/operations/${OP3}/recover.sh" "${OP3}" "${STATE}" 0
+run_remote teardown "${OP3}" "${STATE}" eth0 | grep -q 'state=clean'
+rm -rf "${STATE}"
 
 run_remote apply-tbf "${OP3}" "${STATE}" 30 eth0 10 1600
 run_remote teardown-all "${OP3}" "${STATE}" eth0
