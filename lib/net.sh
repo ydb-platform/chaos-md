@@ -41,11 +41,18 @@ _chaos_net_parse_csv_to_arr() {
 
 # Строки таблицы: новое имя или legacy CHAOS_HOST_IFACE_TABLE.
 _chaos_net_iface_table_rows() {
-    if [[ ${#NET_IFACES_TABLE[@]} -gt 0 ]]; then
-        printf '%s\n' "${NET_IFACES_TABLE[@]}"
-    else
-        printf '%s\n' "${CHAOS_HOST_IFACE_TABLE[@]}"
+    if [[ "${NET_IFACES_TABLE+x}" == x ]]; then
+        if [[ ${#NET_IFACES_TABLE[@]} -gt 0 ]]; then
+            printf '%s\n' "${NET_IFACES_TABLE[@]}"
+            return 0
+        fi
     fi
+    if [[ "${CHAOS_HOST_IFACE_TABLE+x}" == x ]]; then
+        if [[ ${#CHAOS_HOST_IFACE_TABLE[@]} -gt 0 ]]; then
+            printf '%s\n' "${CHAOS_HOST_IFACE_TABLE[@]}"
+        fi
+    fi
+    return 0
 }
 
 # Заполняет массив CHAOS_NET_IFACES_ARR имён интерфейсов для хоста (порядок = порядок применения tc).
@@ -86,7 +93,8 @@ chaos_net_ifaces_for_host() {
         [[ ${#CHAOS_NET_IFACES_ARR[@]} -gt 0 ]] && return 0
     fi
 
-    if [[ ${#NET_IFACES[@]} -gt 0 ]]; then
+    if [[ "${NET_IFACES+x}" == x ]] \
+        && [[ ${#NET_IFACES[@]} -gt 0 ]]; then
         CHAOS_NET_IFACES_ARR=("${NET_IFACES[@]}")
         return 0
     fi
