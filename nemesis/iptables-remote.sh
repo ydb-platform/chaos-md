@@ -7,6 +7,7 @@ fail() { echo "iptables operation: $*" >&2; exit 1; }
 valid_operation() { [[ "${1:-}" =~ ^[0-9a-f]{32}$ ]]; }
 valid_state_root() { [[ "${1:-}" =~ ^/[A-Za-z0-9._/-]+$ ]]; }
 valid_chain() { [[ "${1:-}" =~ ^[A-Za-z0-9_-]{1,28}$ ]]; }
+valid_stacks() { [[ "$1" == 4 || "$1" == 6 || "$1" == 46 ]]; }
 
 valid_csv() {
     local kind="$1" value="$2" item seen="" limit=256
@@ -31,6 +32,16 @@ write_value() {
     tmp="${file}.tmp.$$"
     printf '%s\n' "${value}" > "${tmp}"
     mv -f "${tmp}" "${file}"
+}
+
+read_config() {
+    local file="$1" chain target ifaces ports stacks
+    [[ -f "${file}" && ! -L "${file}" ]] || return 1
+    IFS='|' read -r chain target ifaces ports stacks < "${file}" || return 1
+    valid_chain "${chain}" && [[ "${target}" == REJECT || "${target}" == DROP ]] || return 1
+    valid_csv iface "${ifaces}" && valid_csv port "${ports}" && valid_stacks "${stacks}" || return 1
+    [[ "$(cat "${file}")" == "${chain}|${target}|${ifaces}|${ports}|${stacks}" ]] || return 1
+    printf '%s\n' "${chain}|${target}|${ifaces}|${ports}|${stacks}"
 }
 
 read_owner() {
@@ -88,18 +99,17 @@ chain_active() {
 }
 
 chain_clean() {
-    local chain="$1" stacks="$2" rc
-    if [[ "${stacks}" == *4* ]]; then
-        if run_table 4 -C INPUT -j "${chain}" >/dev/null 2>&1; then return 1; else rc=$?; [[ "${rc}" == 1 ]] || return 2; fi
-        if run_table 4 -C OUTPUT -j "${chain}" >/dev/null 2>&1; then return 1; else rc=$?; [[ "${rc}" == 1 ]] || return 2; fi
-        if run_table 4 -S "${chain}" >/dev/null 2>&1; then return 1; else rc=$?; [[ "${rc}" == 1 ]] || return 2; fi
-    fi
-    if [[ "${stacks}" == *6* ]]; then
-        [[ -n "${IP6TABLES_BIN}" ]] || return 2
-        if run_table 6 -C INPUT -j "${chain}" >/dev/null 2>&1; then return 1; else rc=$?; [[ "${rc}" == 1 ]] || return 2; fi
-        if run_table 6 -C OUTPUT -j "${chain}" >/dev/null 2>&1; then return 1; else rc=$?; [[ "${rc}" == 1 ]] || return 2; fi
-        if run_table 6 -S "${chain}" >/dev/null 2>&1; then return 1; else rc=$?; [[ "${rc}" == 1 ]] || return 2; fi
-    fi
+    local chain="$1" stacks="$2" stack output
+    valid_stacks "${stacks}" || return 2
+    for stack in 4 6; do
+        [[ "${stacks}" == *"${stack}"* ]] || continue
+        output="$(run_table "${stack}" -S)" || return 2
+        awk -v chain="${chain}" '
+            ($1 == "-N" || $1 == "-A") && $2 == chain { found=1 }
+            { for (i=3; i<NF; i++) if (($i == "-j" || $i == "-g") && $(i+1) == chain) found=1 }
+            END { exit found ? 1 : 0 }
+        ' <<< "${output}" || return 1
+    done
 }
 
 cleanup_stack() {
@@ -169,18 +179,21 @@ IFS='|' read -r chain _ _ _ stacks < "${op_dir}/iptables.config"
 [[ "${chain}" =~ ^[A-Za-z0-9_-]{1,28}$ && ( "${stacks}" == 4 || "${stacks}" == 6 || "${stacks}" == 46 ) ]] || exit 1
 owner_file="${state_root}/owners/iptables.${chain}"
 owner=""; [[ ! -f "${owner_file}" ]] || IFS= read -r owner < "${owner_file}" || true
-[[ -z "${owner}" || "${owner}" == "${operation}" ]] || exit 1
+[[ "${owner}" == "${operation}" ]] || exit 1
 timeout_bin="$(command -v timeout)"; iptables_bin="$(command -v iptables)"; ip6tables_bin="$(command -v ip6tables || true)"
 run() { local bin="$1"; shift; "${timeout_bin}" --signal=KILL 10s "${bin}" -w 2 "$@"; }
 clean_stack() {
-    local bin="$1" i rc
+    local bin="$1" i output
     for i in 1 2 3 4; do run "${bin}" -C INPUT -j "${chain}" >/dev/null 2>&1 || break; run "${bin}" -D INPUT -j "${chain}" >/dev/null 2>&1 || return 1; done
     for i in 1 2 3 4; do run "${bin}" -C OUTPUT -j "${chain}" >/dev/null 2>&1 || break; run "${bin}" -D OUTPUT -j "${chain}" >/dev/null 2>&1 || return 1; done
     run "${bin}" -F "${chain}" >/dev/null 2>&1 || true
     run "${bin}" -X "${chain}" >/dev/null 2>&1 || true
-    if run "${bin}" -C INPUT -j "${chain}" >/dev/null 2>&1; then return 1; else rc=$?; [[ "${rc}" == 1 ]] || return 1; fi
-    if run "${bin}" -C OUTPUT -j "${chain}" >/dev/null 2>&1; then return 1; else rc=$?; [[ "${rc}" == 1 ]] || return 1; fi
-    if run "${bin}" -S "${chain}" >/dev/null 2>&1; then return 1; else rc=$?; [[ "${rc}" == 1 ]] || return 1; fi
+    output="$(run "${bin}" -S)" || return 1
+    awk -v chain="${chain}" '
+        ($1 == "-N" || $1 == "-A") && $2 == chain { found=1 }
+        { for (i=3; i<NF; i++) if (($i == "-j" || $i == "-g") && $(i+1) == chain) found=1 }
+        END { exit found ? 1 : 0 }
+    ' <<< "${output}"
 }
 failed=0
 [[ "${stacks}" != *4* ]] || clean_stack "${iptables_bin}" || failed=1
@@ -202,15 +215,15 @@ apply_rules() {
     expected=$((${#iface_values[@]} * ${#port_values[@]} * 4))
     for stack in 4 6; do
         [[ "${stacks}" == *"${stack}"* ]] || continue
-        run_table "${stack}" -N "${chain}"
-        run_table "${stack}" -I INPUT 1 -j "${chain}"
-        run_table "${stack}" -I OUTPUT 1 -j "${chain}"
+        run_table "${stack}" -N "${chain}" || return 1
+        run_table "${stack}" -I INPUT 1 -j "${chain}" || return 1
+        run_table "${stack}" -I OUTPUT 1 -j "${chain}" || return 1
         for iface in "${iface_values[@]}"; do
             for port in "${port_values[@]}"; do
-                run_table "${stack}" -A "${chain}" -p tcp -m tcp -i "${iface}" --dport "${port}" "${rule_tail[@]}"
-                run_table "${stack}" -A "${chain}" -p tcp -m tcp -i "${iface}" --sport "${port}" "${rule_tail[@]}"
-                run_table "${stack}" -A "${chain}" -p tcp -m tcp -o "${iface}" --sport "${port}" "${rule_tail[@]}"
-                run_table "${stack}" -A "${chain}" -p tcp -m tcp -o "${iface}" --dport "${port}" "${rule_tail[@]}"
+                run_table "${stack}" -A "${chain}" -p tcp -m tcp -i "${iface}" --dport "${port}" "${rule_tail[@]}" || return 1
+                run_table "${stack}" -A "${chain}" -p tcp -m tcp -i "${iface}" --sport "${port}" "${rule_tail[@]}" || return 1
+                run_table "${stack}" -A "${chain}" -p tcp -m tcp -o "${iface}" --sport "${port}" "${rule_tail[@]}" || return 1
+                run_table "${stack}" -A "${chain}" -p tcp -m tcp -o "${iface}" --dport "${port}" "${rule_tail[@]}" || return 1
             done
         done
     done
@@ -264,12 +277,18 @@ apply_operation() {
 }
 
 inspect_operation() {
-    local operation="$1" op_dir chain target ifaces ports stacks expected owner
+    local operation="$1" requested_chain="${2:-}" op_dir chain target ifaces ports stacks expected owner config
     local iface_values=() port_values=()
     op_dir="${STATE_ROOT}/operations/${operation}"
-    [[ -f "${op_dir}/iptables.config" ]] || { emit_state "${operation}" clean no_state; return 0; }
-    IFS='|' read -r chain target ifaces ports stacks < "${op_dir}/iptables.config"
-    valid_chain "${chain}" || { emit_state "${operation}" check_failed invalid_config; return 1; }
+    if [[ ! -e "${op_dir}/iptables.config" ]]; then
+        if valid_chain "${requested_chain}" && chain_clean "${requested_chain}" 46; then
+            emit_state "${operation}" clean no_state; return 0
+        fi
+        emit_state "${operation}" check_failed missing_config; return 1
+    fi
+    config="$(read_config "${op_dir}/iptables.config")" || { emit_state "${operation}" check_failed invalid_config; return 1; }
+    IFS='|' read -r chain target ifaces ports stacks <<< "${config}"
+    [[ -z "${requested_chain}" || "${requested_chain}" == "${chain}" ]] || { emit_state "${operation}" check_failed chain_mismatch; return 1; }
     owner="$(read_owner "${STATE_ROOT}/owners/iptables.${chain}" 2>/dev/null || true)"
     if [[ -z "${owner}" ]]; then
         chain_clean "${chain}" "${stacks}" && { emit_state "${operation}" clean ok; return 0; }
@@ -336,8 +355,12 @@ case "${ACTION}" in
         valid_chain "${CHAIN}" || fail 'invalid chain'
         OP_DIR="${STATE_ROOT}/operations/${COMMAND_OPERATION}"
         mkdir -p "${OP_DIR}"; : > "${OP_DIR}/cancelled"
-        [[ -f "${OP_DIR}/iptables.config" ]] || fail 'operation configuration is missing'
-        IFS='|' read -r CONFIG_CHAIN _ _ _ CONFIG_STACKS < "${OP_DIR}/iptables.config"
+        if [[ ! -e "${OP_DIR}/iptables.config" ]]; then
+            cleanup_owned "${COMMAND_OPERATION}" "${CHAIN}" 46 cancelled
+            exit $?
+        fi
+        CONFIG="$(read_config "${OP_DIR}/iptables.config")" || fail 'invalid operation configuration'
+        IFS='|' read -r CONFIG_CHAIN _ _ _ CONFIG_STACKS <<< "${CONFIG}"
         [[ "${CONFIG_CHAIN}" == "${CHAIN}" ]] || fail 'operation chain changed'
         cleanup_owned "${COMMAND_OPERATION}" "${CHAIN}" "${CONFIG_STACKS}" cancelled
         ;;
@@ -346,8 +369,8 @@ case "${ACTION}" in
         for OP_DIR in "${STATE_ROOT}/operations"/*; do
             [[ -d "${OP_DIR}" && -f "${OP_DIR}/iptables.config" ]] || continue
             RESOURCE_OPERATION="${OP_DIR##*/}"; valid_operation "${RESOURCE_OPERATION}" || continue
-            IFS='|' read -r CONFIG_CHAIN _ _ _ CONFIG_STACKS < "${OP_DIR}/iptables.config"
-            valid_chain "${CONFIG_CHAIN}" || { FAILED=1; continue; }
+            CONFIG="$(read_config "${OP_DIR}/iptables.config")" || { FAILED=1; continue; }
+            IFS='|' read -r CONFIG_CHAIN _ _ _ CONFIG_STACKS <<< "${CONFIG}"
             FOUND=true; : > "${OP_DIR}/cancelled"
             cleanup_owned "${RESOURCE_OPERATION}" "${CONFIG_CHAIN}" "${CONFIG_STACKS}" cancelled || FAILED=1
         done
@@ -357,7 +380,8 @@ case "${ACTION}" in
     check)
         if [[ "${OPERATION}" != any ]]; then
             valid_operation "${OPERATION}" || fail 'invalid expected operation'
-            inspect_operation "${OPERATION}"
+            valid_chain "${CHAIN}" || fail 'invalid expected chain'
+            inspect_operation "${OPERATION}" "${CHAIN}"
         else
             FOUND=false; FAILED=0
             for OP_DIR in "${STATE_ROOT}/operations"/*; do

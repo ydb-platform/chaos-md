@@ -18,7 +18,9 @@
 
 nemesis_proc_freeze_apply() {
     local host="$1" timeout_s="$2"
-    local bin="${YDBD_BIN:-/opt/ydb/bin/ydbd}"
+    local bin="${YDBD_BIN:-/opt/ydb/bin/ydbd}" bin_q
+    printf -v bin_q '%q' "${bin}"
+    [[ "${timeout_s}" =~ ^[1-9][0-9]*$ ]] || return 1
 
     log_chaos_apply "SIGSTOP ydbd (${bin}) на ${host}, авто-CONT через ${timeout_s}s"
     chaos_term_remote_cmd "ssh ${host}  pgrep ydbd → kill -STOP, sleep ${timeout_s}s → kill -CONT"
@@ -30,7 +32,7 @@ if [ -f /tmp/proc-freeze.pid ]; then
     kill \$(cat /tmp/proc-freeze.pid) 2>/dev/null || true
     rm -f /tmp/proc-freeze.pid
 fi
-pids=\$(pgrep -f '${bin}' || true)
+pids=\$(pgrep -f -- ${bin_q} || true)
 if [ -z "\${pids}" ]; then echo "ОШИБКА: процессы ydbd не найдены" >&2; exit 1; fi
 sudo kill -STOP \${pids}
 echo "\${pids}" | tr '\n' ' ' > /tmp/proc-freeze.pids
@@ -44,13 +46,14 @@ REMOTE
 
 nemesis_proc_freeze_teardown() {
     local host="$1"
-    local bin="${YDBD_BIN:-/opt/ydb/bin/ydbd}"
+    local bin="${YDBD_BIN:-/opt/ydb/bin/ydbd}" bin_q
+    printf -v bin_q '%q' "${bin}"
     chaos_term_remote_cmd "ssh ${host}  kill -CONT ydbd + remove timer"
     local remote_script
     remote_script=$(cat <<REMOTE
 set -euo pipefail
 if [ -f /tmp/proc-freeze.pid ]; then kill \$(cat /tmp/proc-freeze.pid) 2>/dev/null || true; rm -f /tmp/proc-freeze.pid; fi
-pids=\$(pgrep -f '${bin}' || true)
+pids=\$(pgrep -f -- ${bin_q} || true)
 [ -n "\${pids}" ] && sudo kill -CONT \${pids} 2>/dev/null || true
 rm -f /tmp/proc-freeze.pids
 REMOTE
@@ -61,13 +64,14 @@ REMOTE
 
 nemesis_proc_kill_apply() {
     local host="$1"
-    local bin="${YDBD_BIN:-/opt/ydb/bin/ydbd}"
+    local bin="${YDBD_BIN:-/opt/ydb/bin/ydbd}" bin_q
+    printf -v bin_q '%q' "${bin}"
     log_chaos_apply "SIGKILL ydbd на ${host}"
     chaos_term_remote_cmd "ssh ${host}  pgrep ${bin} → kill -9"
     local remote_script
     remote_script=$(cat <<REMOTE
 set -euo pipefail
-pids=\$(pgrep -f '${bin}' || true)
+pids=\$(pgrep -f -- ${bin_q} || true)
 if [ -z "\${pids}" ]; then echo "ОШИБКА: процессы ydbd не найдены" >&2; exit 1; fi
 sudo kill -9 \${pids}
 REMOTE
@@ -78,7 +82,8 @@ REMOTE
 
 nemesis_proc_check() {
     local host="$1"
-    local bin="${YDBD_BIN:-/opt/ydb/bin/ydbd}"
+    local bin="${YDBD_BIN:-/opt/ydb/bin/ydbd}" bin_q
+    printf -v bin_q '%q' "${bin}"
     chaos_term_remote_cmd "ssh ${host}  systemctl status storage + pgrep ydbd"
     ssh "${SSH_OPTS[@]}" "${host}" "bash -s" <<REMOTE
 echo "=== Сервис на ${host} ==="
@@ -90,7 +95,7 @@ for svc in kikimr.service ydbd.service; do
     fi
 done
 echo "--- процессы ---"
-pids=\$(pgrep -f '${bin}' 2>/dev/null || true)
+pids=\$(pgrep -f -- ${bin_q} 2>/dev/null || true)
 if [ -z "\${pids}" ]; then echo "  нет процессов"; else ps -o pid,stat,pcpu,pmem,etime -p \${pids} 2>/dev/null; fi
 REMOTE
 }
