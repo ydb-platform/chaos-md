@@ -325,7 +325,7 @@ SSH port-forwarding туннели к стенду: Grafana и YDB monitoring po
 - `-t` — длительность фазы (секунды); `-D` — досрочное снятие.
 - **`prepare-hosts.sh`** — подготавливает пакеты, blade и архив rolling upgrade.
 - Логи: `logs/<имя>.log`; события для Grafana: `logs/timeline.log`.
-- SSH — без пароля, `BatchMode`. `~/blade` на нодах обязателен для тестов 01 и 02.
+- SSH — без пароля, `BatchMode`. Подключение ограничено `CHAOS_SSH_CONNECT_TIMEOUT=8`, а потерянное соединение обнаруживается через `CHAOS_SSH_SERVER_ALIVE_INTERVAL=5` и `CHAOS_SSH_SERVER_ALIVE_COUNT_MAX=2`. Значения задаются в секундах и должны быть положительными целыми числами. `~/blade` на нодах обязателен для тестов 01 и 02.
 
 ## Мониторинг
 
