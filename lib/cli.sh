@@ -12,6 +12,7 @@
 #   -D / --teardown      снять хаос
 #   -C / --check [HOST]  показать состояние
 #   --json               машинный вывод в формате JSON Lines
+#   --capabilities       показать машинный контракт и завершиться
 #   -h / --help          справка
 #
 # chaos_parse_common "$@"  — заполняет глобалы, неузнанные опции складывает
@@ -41,6 +42,19 @@ chaos_parse_common() {
     for arg in "$@"; do
         [[ "${arg}" == --json ]] && chaos_json_enable
     done
+    for arg in "$@"; do
+        if [[ "${arg}" == --capabilities ]]; then
+            if [[ "${MODE_JSON}" == true ]]; then
+                chaos_json_emit_capabilities
+                CHAOS_JSON_TERMINAL_EMITTED=true
+            else
+                printf '%s\n' \
+                    'Chaos MD shell contract 3' \
+                    'Features: explicit-hosts operation-id command-frames resource-observations'
+            fi
+            exit 0
+        fi
+    done
     while [[ $# -gt 0 ]]; do
         case "$1" in
             -1|--single)   SCOPE_SINGLE=true; shift ;;
@@ -51,6 +65,7 @@ chaos_parse_common() {
             -D|--teardown) MODE_TEARDOWN=true; shift ;;
             -N|--dry-run)  CHAOS_DRY_RUN=true; shift ;;
             --json)        shift ;;
+            --capabilities) shift ;;
             --operation)   shift 2 ;;
             --hosts)
                 if [[ -z "${2:-}" || "${2:-}" == ,* || "${2:-}" == *, || "${2:-}" == *,,* ]]; then
@@ -131,6 +146,7 @@ EOF
   -C, --check [HOST]    Показать состояние (без HOST — ${SINGLE_HOST:-?})
   -N, --dry-run         Не выполнять ssh/scp; показать только что бы запустилось
       --json            JSON Lines в stdout; человекочитаемый вывод остаётся в stderr
+      --capabilities    Показать версию и возможности shell-контракта
 EOF
     else
         echo "  -C, --check [HOST]    Показать состояние (без HOST — ${SINGLE_HOST:-?})"

@@ -75,6 +75,14 @@ chaos_json_emit() {
         "$(chaos_json_escape "${message}")" >&3
 }
 
+chaos_json_emit_capabilities() {
+    [[ "${MODE_JSON:-false}" == true ]] || return 0
+    local timestamp
+    timestamp="$(date -u '+%Y-%m-%dT%H:%M:%SZ')"
+    printf '{"schemaVersion":3,"kind":"capabilities","contract":"chaos-md-shell","features":["explicit-hosts","operation-id","command-frames","resource-observations"],"timestamp":"%s"}\n' \
+        "${timestamp}" >&3
+}
+
 chaos_json_emit_observation() {
     [[ "${MODE_JSON:-false}" == true ]] || return 0
     local host="$1" resource="$2" state="$3" boot_id="$4" revision="$5"

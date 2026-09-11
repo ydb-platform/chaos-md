@@ -39,6 +39,30 @@ grep -Fq '"message":"quoted \"value\""}' <<< "${json}"
 [[ "$(printf '%s\n' "${json}" | wc -l | tr -d ' ')" == 2 ]]
 while IFS= read -r line; do jq -e . >/dev/null <<< "${line}"; done <<< "${json}"
 
+capabilities="$(${BASH:-bash} -c '
+    TEST_NAME=sample
+    TEST_SCOPE=single
+    SINGLE_HOST=node-a
+    DC_HOSTS=()
+    DC_ALT_HOSTS=()
+    source "$1/lib/operation.sh"
+    source "$1/lib/json.sh"
+    source "$1/lib/cli.sh"
+    chaos_parse_common --json --capabilities
+' _ "${ROOT}" 2>/dev/null)"
+[[ "$(printf '%s\n' "${capabilities}" | wc -l | tr -d ' ')" == 1 ]]
+jq -e '.schemaVersion == 3 and .kind == "capabilities"
+    and .contract == "chaos-md-shell"
+    and .features == ["explicit-hosts", "operation-id", "command-frames", "resource-observations"]
+    and (.timestamp | type == "string")' <<< "${capabilities}" >/dev/null
+
+readable="$(${BASH:-bash} -c '
+    TEST_NAME=sample; TEST_SCOPE=single; SINGLE_HOST=node-a; DC_HOSTS=(); DC_ALT_HOSTS=()
+    source "$1/lib/operation.sh"; source "$1/lib/json.sh"; source "$1/lib/cli.sh"
+    chaos_parse_common --capabilities
+' _ "${ROOT}")"
+grep -Fq 'Chaos MD shell contract 3' <<< "${readable}"
+
 observation="$(${BASH:-bash} -c '
     TEST_NAME=sample
     CHAOS_OPERATION_ID=0123456789abcdef0123456789abcdef
