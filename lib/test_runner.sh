@@ -55,7 +55,6 @@ chaos_run_window() {
             log_tl "CHAOS_CANCEL" "${short}  scope=${SCOPE_LABEL}  hosts=${#TARGET_HOSTS[@]}  signal=${signal}"
         else
             log "Снятие после ${signal} завершилось ошибкой."
-            chaos_json_emit teardown command_failed "${cleanup_rc}" "${short}  interrupted; teardown failed"
         fi
         exit "${rc}"
     }
@@ -65,8 +64,11 @@ chaos_run_window() {
 
     if ! "${apply_fn}" "${TARGET_HOSTS[@]}"; then
         log "Применение хаоса завершилось ошибкой. Выполняется компенсация."
-        "${teardown_fn}" "${TARGET_HOSTS[@]}" || log "Компенсация после ошибки применения тоже завершилась ошибкой."
-        chaos_json_emit teardown command_failed 1 "${short}  apply failed; compensation attempted"
+        if "${teardown_fn}" "${TARGET_HOSTS[@]}"; then
+            chaos_json_emit teardown command_succeeded null "${short}  apply failed; compensation completed"
+        else
+            log "Компенсация после ошибки применения тоже завершилась ошибкой."
+        fi
         _chaos_run_window_restore_traps
         return 1
     fi
@@ -75,14 +77,16 @@ chaos_run_window() {
     log_wait_sec "${TIMEOUT}"
     if ! chaos_wait_with_timer "${TIMEOUT}" "${short}  ${SCOPE_LABEL}=${#TARGET_HOSTS[@]}h"; then
         log "Ожидание завершилось досрочно. Хаос снимается."
-        "${teardown_fn}" "${TARGET_HOSTS[@]}" || log "Снятие после досрочного завершения тоже завершилось ошибкой."
-        chaos_json_emit teardown command_failed 1 "${short}  wait interrupted; teardown attempted"
+        if "${teardown_fn}" "${TARGET_HOSTS[@]}"; then
+            log_tl "CHAOS_CANCEL" "${short}  scope=${SCOPE_LABEL}  hosts=${#TARGET_HOSTS[@]}  wait interrupted"
+        else
+            log "Снятие после досрочного завершения тоже завершилось ошибкой."
+        fi
         _chaos_run_window_restore_traps
         return 1
     fi
 
     if ! "${teardown_fn}" "${TARGET_HOSTS[@]}"; then
-        chaos_json_emit teardown command_failed 1 "${short}  teardown failed"
         _chaos_run_window_restore_traps
         return 1
     fi
