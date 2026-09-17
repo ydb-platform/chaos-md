@@ -57,6 +57,7 @@ DEFAULT_CPU_PERCENT=90
 # Сетевые стеки для tc и iptables (true/false).
 CHAOS_NET_IPV4="${CHAOS_NET_IPV4:-true}"
 CHAOS_NET_IPV6="${CHAOS_NET_IPV6:-false}"
+CHAOS_TC_STATE_DIR="${CHAOS_TC_STATE_DIR:-/var/lib/chaos-md}"
 
 # Базовый список интерфейсов, если для хоста нет строки в NET_IFACES_TABLE.
 NET_IFACE="eth0"
@@ -78,6 +79,7 @@ DEFAULT_BW_RATE=1
 YDB_PORTS="2135,2136,19001,8765,31000:32000"
 
 # Цепочка для 06/11; имя можно переопределить (раньше в доках фигурировало YDB_FW).
+# Префикс уникальных цепочек операций 06/11. Скрипт ограничивает его до 10 символов.
 CHAOS_IPTABLES_CHAIN="${CHAOS_IPTABLES_CHAIN:-YDB_CHAOS_FW}"
 
 # Если ./blade ругается на флаги — задайте свои шаблоны (плейсхолдеры @CPU_PERCENT@ @MEM_PERCENT@ @MEM_RATE@ @TIMEOUT@).
@@ -114,6 +116,9 @@ CHAOS_DISK_RESTART_STORAGE="${CHAOS_DISK_RESTART_STORAGE:-true}"
 DEFAULT_YDBD_BIN="/opt/ydb/bin/ydbd"
 
 SSH_OPTS=(-o StrictHostKeyChecking=no -o LogLevel=ERROR -o BatchMode=yes)
+CHAOS_SSH_CONNECT_TIMEOUT="${CHAOS_SSH_CONNECT_TIMEOUT:-8}"
+CHAOS_SSH_SERVER_ALIVE_INTERVAL="${CHAOS_SSH_SERVER_ALIVE_INTERVAL:-5}"
+CHAOS_SSH_SERVER_ALIVE_COUNT_MAX="${CHAOS_SSH_SERVER_ALIVE_COUNT_MAX:-2}"
 
 GRAFANA_URL="${GRAFANA_URL:-https://grafana.example.invalid/}"
 GRAFANA_TOKEN="${GRAFANA_TOKEN:-}"

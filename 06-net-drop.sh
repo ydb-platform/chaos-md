@@ -4,6 +4,7 @@
 set -euo pipefail
 TEST_NAME="06-net-drop"
 TEST_SCOPE="single"
+CHAOS_RESOURCE_EVIDENCE_FAMILY="iptables"
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "${SCRIPT_DIR}/lib/init.sh"
@@ -36,14 +37,18 @@ i=0; while (( i < ${#CHAOS_REMAINING_ARGS[@]} )); do
 done
 
 if [[ "${MODE_CHECK}" == true ]]; then
-    nemesis_iptables_check "${CHECK_HOST}"
+    chaos_run_checks nemesis_iptables_check
     exit 0
 fi
 
 if [[ "${MODE_TEARDOWN}" == true ]]; then
     chaos_log_script_start
     trap 'chaos_log_script_end' EXIT
-    nemesis_iptables_teardown "${NODE_HOST}" "${IPT_TARGET}"
+    TARGET_HOSTS=("${NODE_HOST}")
+    if [[ -n "${EXPLICIT_HOSTS[*]:-}" || "${SCOPE_SINGLE}" == true || "${SCOPE_DC}" == true || "${SCOPE_DC_ALT}" == true ]]; then
+        chaos_resolve_teardown_targets || exit 1
+    fi
+    nemesis_iptables_teardown_all "${TARGET_HOSTS[@]}"
     log_tl "CHAOS_CANCEL" "net ${IPT_TARGET}  scope=node  host=${NODE_HOST}"
     exit 0
 fi

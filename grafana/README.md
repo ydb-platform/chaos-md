@@ -104,7 +104,7 @@ GRAFANA_PORT=3000
 ./grafana/deploy-dashboard.sh
 ```
 
-Скрипт спрашивает имя (последнее запоминается в `grafana/.chaos-grafana-last`). Source — `grafana/dashboards/chaos-tests.json`. Удобно держать рабочий и тестовый дашборды (разные имена).
+Скрипт спрашивает имя (последнее запоминается в `grafana/.chaos-grafana-last`). Source — `grafana/dashboards/chaos/chaos-tests.json`. Удобно держать рабочий и тестовый дашборды (разные имена).
 
 ---
 
@@ -118,11 +118,9 @@ grafana/
 ├── 04-dashboards-provision.sh    — рендер provisioning + restart
 ├── deploy-dashboard.sh           — API-апдейт дашборда (hot)
 ├── annotate.sh                   — создать аннотацию
-├── edit-annotation.sh            — TUI редактор аннотаций
-├── edit_annotation.py            — Python-реализация TUI
-├── requirements-editor.txt       — зависимости edit_annotation.py
 ├── dashboards/
-│   └── chaos-tests.json          — основной дашборд хаос-тестов
+│   └── chaos/
+│       └── chaos-tests.json      — основной дашборд хаос-тестов
 └── provisioning/
     ├── datasources/
     │   ├── victoriametrics.yml.tmpl   — шаблон (рендерится 04-скриптом)

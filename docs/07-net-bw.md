@@ -89,13 +89,8 @@ tc qdisc show dev eth0
 
 ## Автоматическое снятие по таймауту
 
-```bash
-nohup bash -c "sleep 1200 && sudo tc qdisc del dev eth0 root 2>/dev/null && rm -f /tmp/tc-chaos.pid" \
-    >/dev/null 2>&1 &
-echo $! > /tmp/tc-chaos.pid
-```
-
-Процесс живёт независимо от SSH-сессии.
+Удаленный скрипт запускает таймер до установки tbf. Таймер сверяет владельца
+интерфейса, снимает только qdisc своей операции и проверяет результат.
 
 ## Досрочное снятие (-D)
 
@@ -103,14 +98,8 @@ echo $! > /tmp/tc-chaos.pid
 ./07-net-bw.sh -D
 ```
 
-Или вручную на хосте:
-```bash
-if [ -f /tmp/tc-chaos.pid ]; then
-    kill $(cat /tmp/tc-chaos.pid) 2>/dev/null || true
-    rm -f /tmp/tc-chaos.pid
-fi
-sudo tc qdisc del dev eth0 root
-```
+Флаг `--operation` адресует исходную операцию. Без явного идентификатора команда
+выполняет ручное снятие на настроенных интерфейсах.
 
 ## Проверка статуса (-C)
 
@@ -121,16 +110,8 @@ sudo tc qdisc del dev eth0 root
 
 Вывод (пример):
 ```
-node-a.example.net (eth0)  chaos: ACTIVE   [tbf] rate=1Mbit burst=15200b latency=50ms
-
-RTT → 2001:db8::1 (node-b.example.net):19001  (10 проб)
-   0.41 ms  |##
-   0.38 ms  |##
-   avg: 0.39 ms
+resource=tc:eth0 state=active operation=0123456789abcdef0123456789abcdef
 ```
-
-RTT при TBF меняется мало — ограничение проявляется в пропускной способности (throughput),
-а не в задержке. Для наблюдения эффекта используйте `iperf3` или метрики YDB.
 
 ## Команды для ручного применения
 

@@ -35,15 +35,7 @@ if (( ${#CHAOS_REMAINING_ARGS[@]} > 0 )); then
 fi
 
 if [[ "${MODE_CHECK}" == true ]]; then
-    if [[ "${SCOPE_SINGLE}" == true || "${SCOPE_DC}" == true || "${SCOPE_DC_ALT}" == true ]]; then
-        chaos_resolve_targets
-        local _h
-        for _h in "${TARGET_HOSTS[@]}"; do
-            nemesis_proc_check "${_h}"
-        done
-    else
-        nemesis_proc_check "${CHECK_HOST}"
-    fi
+    chaos_run_checks nemesis_proc_check
     exit 0
 fi
 
@@ -60,7 +52,7 @@ chaos_require_scope || { chaos_usage >&2; exit 1; }
 chaos_resolve_targets
 
 chaos_log_script_start
-trap 'log_tl "CHAOS_CANCEL" "proc freeze  scope=${SCOPE_LABEL}  hosts=${TARGET_HOSTS[*]}  (прервано)" || true; chaos_log_script_end' EXIT
+trap 'rc=$?; log_tl "CHAOS_CANCEL" "proc freeze  scope=${SCOPE_LABEL}  hosts=${TARGET_HOSTS[*]}  (прервано)" || true; chaos_log_script_end "${rc}"' EXIT
 
 chaos_announce "freeze ydbd timeout=${TIMEOUT}s scope=${SCOPE_LABEL} hosts=${#TARGET_HOSTS[@]}"
 

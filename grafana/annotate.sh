@@ -45,10 +45,11 @@ EOF
 }
 
 _grafana_time_ms() {
-    date +%s%3N 2>/dev/null | grep -q '^[0-9]\{13\}$' \
-        && date +%s%3N \
-        || python3 -c "import time; print(int(time.time()*1000))" 2>/dev/null \
-        || echo $(( $(date +%s) * 1000 ))
+    if date +%s%3N 2>/dev/null | grep -q '^[0-9]\{13\}$'; then
+        date +%s%3N
+    else
+        echo $(( $(date +%s) * 1000 ))
+    fi
 }
 
 ALL_DASHBOARDS=false
@@ -116,40 +117,24 @@ if [[ "${ALL_DASHBOARDS}" != true ]]; then
         echo "       Или используйте -a для org-wide аннотации." >&2
         exit 1
     else
-        DASH_UID="$(DASHBOARD_URL_FOR_PARSE="${DASHBOARD_URL}" python3 <<'PY'
-from urllib.parse import urlparse
-import os
-u = os.environ["DASHBOARD_URL_FOR_PARSE"]
-p = urlparse(u)
-parts = [x for x in p.path.split("/") if x]
-if len(parts) >= 2 and parts[0] == "d":
-    print(parts[1])
-else:
-    raise SystemExit("не удалось извлечь UID дашборда из URL (ожидается путь /d/<uid>/...)")
-PY
-)" || {
-            echo "Ошибка: ${DASH_UID}" >&2
-            exit 1
-        }
+        DASH_PATH="${DASHBOARD_URL%%[?#]*}"
+        case "${DASH_PATH}" in
+            */d/*) DASH_UID="${DASH_PATH#*/d/}"; DASH_UID="${DASH_UID%%/*}" ;;
+            *) echo "Ошибка: не удалось извлечь UID дашборда из URL (ожидается путь /d/<uid>/...)" >&2; exit 1 ;;
+        esac
+        [[ -n "${DASH_UID}" ]] || { echo "Ошибка: UID дашборда пуст" >&2; exit 1; }
     fi
 fi
 
-PAYLOAD="$(ANN_TEXT="${ANN_TEXT}" TAGS_CSV="${TAGS_CSV}" TIME_MS="${TIME_MS}" TIME_END_MS="${TIME_END_MS}" DASH_UID="${DASH_UID}" GFA_ORG_WIDE="${ALL_DASHBOARDS}" python3 <<'PY'
-import json, os
-
-text = os.environ["ANN_TEXT"]
-tags = [t.strip() for t in os.environ["TAGS_CSV"].split(",") if t.strip()]
-t0 = int(os.environ["TIME_MS"])
-t1 = int(os.environ["TIME_END_MS"])
-uid = os.environ.get("DASH_UID", "").strip()
-org_wide = os.environ.get("GFA_ORG_WIDE", "") == "true"
-
-body = {"time": t0, "timeEnd": t1, "tags": tags, "text": text}
-if not org_wide and uid:
-    body["dashboardUID"] = uid
-print(json.dumps(body))
-PY
-)"
+PAYLOAD="$(jq -nc \
+    --arg text "${ANN_TEXT}" \
+    --arg tags "${TAGS_CSV}" \
+    --arg uid "${DASH_UID}" \
+    --argjson time "${TIME_MS}" \
+    --argjson timeEnd "${TIME_END_MS}" \
+    --argjson orgWide "${ALL_DASHBOARDS}" \
+    '{time:$time,timeEnd:$timeEnd,tags:($tags|split(",")|map(gsub("^[[:space:]]+|[[:space:]]+$";"")|select(length>0))),text:$text}
+     + if ($orgWide or ($uid|length)==0) then {} else {dashboardUID:$uid} end')"
 
 resp_file=$(mktemp)
 trap 'rm -f "${resp_file}"' EXIT
@@ -165,4 +150,4 @@ if [[ "${http_code}" != "200" ]]; then
     exit 1
 fi
 
-python3 -c "import json,sys; d=json.load(open(sys.argv[1])); print('id=', d.get('id','?'))" "${resp_file}" 2>/dev/null || cat "${resp_file}"
+jq -r '"id=\(.id // "?")"' "${resp_file}" 2>/dev/null || cat "${resp_file}"

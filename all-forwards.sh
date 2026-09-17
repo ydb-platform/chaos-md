@@ -10,6 +10,8 @@
 #   ./all-forwards.sh        — открыть туннели
 #   ./all-forwards.sh -k     — закрыть туннели
 
+echo -e "\033[1;31m[DEPRECATED] all-forwards.sh устарел. Используйте forwards.sh\033[0m" >&2
+
 set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "${SCRIPT_DIR}/env.sh"

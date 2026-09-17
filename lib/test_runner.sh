@@ -15,6 +15,13 @@ chaos_announce() {
     log "Параметры: $*"
 }
 
+chaos_run_checks() {
+    local check_fn="$1"; shift
+    chaos_resolve_check_targets
+    parallel_for_hosts "${check_fn}" "${TARGET_HOSTS[@]}" -- "$@"
+    chaos_json_emit check command_succeeded null
+}
+
 # Запустить хаос с автоматическим тикером и явным снятием по окончании окна.
 #
 # Использование:
@@ -29,15 +36,63 @@ chaos_announce() {
 #   - вызываем teardown_fn (явное снятие; даже если фоновый таймер на хосте уже снял хаос — операция идемпотентна).
 chaos_run_window() {
     local short="$1" apply_fn="$2" teardown_fn="$3"
+    local previous_int previous_term
+    previous_int="$(trap -p INT)"
+    previous_term="$(trap -p TERM)"
 
-    "${apply_fn}" "${TARGET_HOSTS[@]}"
+    _chaos_run_window_restore_traps() {
+        if [[ -n "${previous_int}" ]]; then eval "${previous_int}"; else trap - INT; fi
+        if [[ -n "${previous_term}" ]]; then eval "${previous_term}"; else trap - TERM; fi
+    }
+
+    _chaos_run_window_interrupt() {
+        local signal="$1" rc=130 cleanup_rc=0
+        [[ "${signal}" == TERM ]] && rc=143
+        trap - INT TERM
+        log "Получен ${signal}. Хаос снимается."
+        "${teardown_fn}" "${TARGET_HOSTS[@]}" || cleanup_rc=$?
+        if ((cleanup_rc == 0)); then
+            log_tl "CHAOS_CANCEL" "${short}  scope=${SCOPE_LABEL}  hosts=${#TARGET_HOSTS[@]}  signal=${signal}"
+        else
+            log "Снятие после ${signal} завершилось ошибкой."
+        fi
+        exit "${rc}"
+    }
+
+    trap '_chaos_run_window_interrupt INT' INT
+    trap '_chaos_run_window_interrupt TERM' TERM
+
+    if ! "${apply_fn}" "${TARGET_HOSTS[@]}"; then
+        log "Применение хаоса завершилось ошибкой. Выполняется компенсация."
+        if "${teardown_fn}" "${TARGET_HOSTS[@]}"; then
+            chaos_json_emit teardown command_succeeded null "${short}  apply failed; compensation completed"
+        else
+            log "Компенсация после ошибки применения тоже завершилась ошибкой."
+        fi
+        _chaos_run_window_restore_traps
+        return 1
+    fi
     log_tl "CHAOS_START" "${short}  scope=${SCOPE_LABEL}  hosts=${#TARGET_HOSTS[@]}  timeout=${TIMEOUT}s"
 
     log_wait_sec "${TIMEOUT}"
-    chaos_wait_with_timer "${TIMEOUT}" "${short}  ${SCOPE_LABEL}=${#TARGET_HOSTS[@]}h"
+    if ! chaos_wait_with_timer "${TIMEOUT}" "${short}  ${SCOPE_LABEL}=${#TARGET_HOSTS[@]}h"; then
+        log "Ожидание завершилось досрочно. Хаос снимается."
+        if "${teardown_fn}" "${TARGET_HOSTS[@]}"; then
+            log_tl "CHAOS_CANCEL" "${short}  scope=${SCOPE_LABEL}  hosts=${#TARGET_HOSTS[@]}  wait interrupted"
+        else
+            log "Снятие после досрочного завершения тоже завершилось ошибкой."
+        fi
+        _chaos_run_window_restore_traps
+        return 1
+    fi
 
-    "${teardown_fn}" "${TARGET_HOSTS[@]}"
+    if ! "${teardown_fn}" "${TARGET_HOSTS[@]}"; then
+        _chaos_run_window_restore_traps
+        return 1
+    fi
+    chaos_json_emit teardown command_succeeded null "${short}  scope=${SCOPE_LABEL}  hosts=${#TARGET_HOSTS[@]}"
     log_tl "CHAOS_END  " "${short}  scope=${SCOPE_LABEL}  hosts=${#TARGET_HOSTS[@]}"
+    _chaos_run_window_restore_traps
 }
 
 # Аналог, но без явного снятия после ожидания (хаос завершается сам по таймеру

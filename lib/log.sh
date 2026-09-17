@@ -133,9 +133,15 @@ chaos_log_script_start() {
 }
 
 chaos_log_script_end() {
+    local rc=$?
+    [[ $# -gt 0 ]] && rc="$1"
     log "Завершение ${TEST_NAME}"
     local sep
     sep="$(printf '%.0s-' {1..72})"
     [[ -n "${LOG_FILE:-}" ]] && printf '%s\n' "${sep}" >> "${LOG_FILE}"
     printf '%s\n' "${sep}" >&2
+    if declare -F chaos_json_exit_trap >/dev/null; then
+        chaos_json_exit_trap "${rc}" || true
+    fi
+    return "${rc}"
 }

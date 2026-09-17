@@ -37,12 +37,20 @@ stats_stream_to_lp() {
             }
             return t
         }
-        function iso_to_ns(s,    cmd, t) {
-            cmd = "python3 -c \"import sys,datetime;s=sys.argv[1].rstrip(chr(90));d=datetime.datetime.fromisoformat(s);d=d.replace(tzinfo=datetime.timezone.utc) if d.tzinfo is None else d;print(int(d.timestamp()*1e9))\" \"" s "\" 2>/dev/null"
+        function iso_to_ns(s,    cmd, t, base) {
+            base = s
+            sub(/\.[0-9]+Z$/, "Z", base)
+            if (base !~ /^[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]T[0-9][0-9]:[0-9][0-9]:[0-9][0-9]Z$/) return ""
+            cmd = "date -u -d " base " +%s 2>/dev/null"
             cmd | getline t
             close(cmd)
-            if (t == "") return ""
-            return t
+            if (t == "") {
+                cmd = "date -j -u -f %Y-%m-%dT%H:%M:%SZ " base " +%s 2>/dev/null"
+                cmd | getline t
+                close(cmd)
+            }
+            if (t !~ /^[0-9]+$/) return ""
+            return t "000000000"
         }
         BEGIN { got_header = 0; ncols = 0 }
         {

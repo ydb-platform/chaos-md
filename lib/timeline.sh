@@ -14,11 +14,19 @@ log_tl() {
             printf "%-26s  %-16s  %s\n" "$(now_msk)" "${event}" "${details}" \
                 | tee -a "${timeline}"
             grafana_region_open "${TEST_NAME}" "${event}  ${details}"
+            chaos_json_emit apply command_succeeded null "${details}"
             ;;
-        CHAOS_END*|CHAOS_CANCEL)
+        CHAOS_END*)
             printf "%-26s  %-16s  %s\n" "$(now_msk)" "${event}" "${details}" \
                 | tee -a "${timeline}"
             grafana_region_close "${TEST_NAME}"
+            chaos_json_emit window_complete command_succeeded null "${details}"
+            ;;
+        CHAOS_CANCEL)
+            printf "%-26s  %-16s  %s\n" "$(now_msk)" "${event}" "${details}" \
+                | tee -a "${timeline}"
+            grafana_region_close "${TEST_NAME}"
+            chaos_json_emit teardown command_succeeded null "${details}"
             ;;
     esac
 }

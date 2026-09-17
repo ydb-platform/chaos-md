@@ -9,14 +9,20 @@ SCOPE_LABEL=""
 
 chaos_resolve_targets() {
     TARGET_HOSTS=()
+    # --hosts имеет приоритет над -1/-4/-A.
+    if [[ -n "${EXPLICIT_HOSTS[*]:-}" ]]; then
+        TARGET_HOSTS=("${EXPLICIT_HOSTS[@]}")
+        SCOPE_LABEL="explicit"
+        return 0
+    fi
     if [[ "${SCOPE_SINGLE}" == true ]]; then
         TARGET_HOSTS=("${NODE_HOST}")
         SCOPE_LABEL="node"
     elif [[ "${SCOPE_DC}" == true ]]; then
-        TARGET_HOSTS=("${DC_HOSTS[@]}")
+        TARGET_HOSTS=(${DC_HOSTS[@]+"${DC_HOSTS[@]}"})
         SCOPE_LABEL="dc"
     elif [[ "${SCOPE_DC_ALT}" == true ]]; then
-        TARGET_HOSTS=("${DC_ALT_HOSTS[@]}")
+        TARGET_HOSTS=(${DC_ALT_HOSTS[@]+"${DC_ALT_HOSTS[@]}"})
         SCOPE_LABEL="dc_alt"
     fi
 }
@@ -26,7 +32,7 @@ chaos_resolve_targets() {
 # чтобы снять tc/iptables‑подобное со всех нод кластера: одной только пары SINGLE+DC
 # недостаточно, если хаос запускали на ноде из CLUSTER_HOSTS или с «-1 -H другой_хост».
 chaos_resolve_teardown_targets() {
-    if [[ "${SCOPE_SINGLE}" == true || "${SCOPE_DC}" == true || "${SCOPE_DC_ALT}" == true ]]; then
+    if [[ -n "${EXPLICIT_HOSTS[*]:-}" || "${SCOPE_SINGLE}" == true || "${SCOPE_DC}" == true || "${SCOPE_DC_ALT}" == true ]]; then
         chaos_resolve_targets
         return 0
     fi
@@ -56,6 +62,19 @@ chaos_resolve_teardown_targets() {
         return 1
     fi
     return 0
+}
+
+chaos_resolve_check_targets() {
+    chaos_resolve_targets
+    if [[ -z "${TARGET_HOSTS[*]:-}" ]]; then
+        if [[ "${SCOPE_SINGLE}" == true || "${SCOPE_DC}" == true || "${SCOPE_DC_ALT}" == true ]]; then
+            echo 'Выбранная группа --check не содержит хостов' >&2
+            return 1
+        fi
+        [[ -n "${CHECK_HOST:-}" ]] || { echo 'Не задан хост для --check' >&2; return 1; }
+        TARGET_HOSTS=("${CHECK_HOST}")
+        SCOPE_LABEL=node
+    fi
 }
 
 # Краткое описание целей для chaos_term_target.
