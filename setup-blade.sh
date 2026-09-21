@@ -6,7 +6,6 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 exec "${SCRIPT_DIR}/prepare-hosts.sh" \
-    --no-iptables \
     --no-packages \
     --no-upgrade-dist \
     "$@"

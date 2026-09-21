@@ -77,6 +77,18 @@ nemesis_blade_run() {
     fi
 }
 
+# Status:Destroyed или неизвестный UID — воздействия нет, хвост UID можно снять.
+_blade_experiment_gone() {
+    local json="$1"
+    [[ -z "${json}" ]] && return 0
+    [[ "${json}" == *'"Status":"Destroyed"'* || "${json}" == *'"Status": "Destroyed"'* ]]
+}
+
+_blade_status_json() {
+    local host="$1" uid="$2"
+    ssh ${SSH_OPTS[@]+"${SSH_OPTS[@]}"} "${host}" "${BLADE_REMOTE} status ${uid}" 2>&1
+}
+
 # Отменить эксперимент по сохранённому UID.
 nemesis_blade_destroy() {
     local host="$1" suffix="${2:-uid}"
@@ -93,22 +105,28 @@ nemesis_blade_destroy() {
     _kl=$(chaos_remote_line_kind "${_bk}")
     case "${_kl}" in on | off) chaos_log_remote_line "${_kl}" "${_bk}" ;; *) log "  ${_bk}" ;; esac
 
-    local out
-    if ! out=$(ssh ${SSH_OPTS[@]+"${SSH_OPTS[@]}"} "${host}" "${BLADE_REMOTE} destroy ${uid}" 2>&1); then
-        log "blade destroy failed ${host}: ${out}"
-        return 1
-    fi
+    local out status
+    out=$(ssh ${SSH_OPTS[@]+"${SSH_OPTS[@]}"} "${host}" "${BLADE_REMOTE} destroy ${uid}" 2>&1) || true
     log "blade destroy ${host}: ${out}"
-    if [[ "${out}" != *'"success":true'* && "${out}" != *'"success": true'* ]]; then
-        log "blade destroy ${host}: success not confirmed; UID retained"
-        return 1
+    if [[ "${out}" == *'"success":true'* || "${out}" == *'"success": true'* ]]; then
+        rm -f "${sf}"
+        return 0
     fi
-    rm -f "${sf}"
+    status=$(_blade_status_json "${host}" "${uid}") || status=""
+    if _blade_experiment_gone "${status}"; then
+        log "blade ${host}: Status=Destroyed, UID снят"
+        rm -f "${sf}"
+        return 0
+    fi
+    log "blade destroy ${host}: воздействие ещё активно; UID сохранён"
+    return 1
 }
 
 # Показать статус blade-экспериментов по сохранённым UID.
+# 0 — нет UID или все Destroyed; 1 — есть живой эксперимент или status недоступен.
 nemesis_blade_check() {
     local host="${1:-${SINGLE_HOST}}"
+    local rc=0
     echo "=== blade на ${host} (${TEST_NAME}) ==="
     local files=("${LOG_DIR}/${TEST_NAME}.${host}".*)
     if [[ ! -f "${files[0]:-}" ]]; then
@@ -117,11 +135,24 @@ nemesis_blade_check() {
     fi
     for f in "${files[@]}"; do
         [[ -f "${f}" ]] || continue
-        local suffix="${f##*.}" uid; uid=$(cat "${f}")
+        local suffix="${f##*.}" uid status
+        uid=$(cat "${f}")
         echo "  [${suffix}] uid=${uid}"
         chaos_term_remote_cmd "ssh ${host}  blade status ${uid}"
-        ssh ${SSH_OPTS[@]+"${SSH_OPTS[@]}"} "${host}" "${BLADE_REMOTE} status ${uid}" 2>&1 | head -3 || true
+        if ! status=$(_blade_status_json "${host}" "${uid}"); then
+            echo "  status недоступен"
+            rc=1
+            continue
+        fi
+        printf '%s\n' "${status}" | head -3
+        if _blade_experiment_gone "${status}"; then
+            echo "  Status=Destroyed — воздействия нет"
+            continue
+        fi
+        echo "  воздействие ещё активно"
+        rc=1
     done
+    return "${rc}"
 }
 
 # Параллельно отменить все сохранённые UID текущего теста с заданным суффиксом.
