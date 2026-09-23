@@ -122,15 +122,30 @@ nemesis_blade_destroy() {
     return 1
 }
 
+# Проверить и явно показать доступность узла по SSH.
+_blade_check_ssh() {
+    local host="$1" out
+    chaos_term_remote_cmd "ssh ${host}  true  # проверка доступности SSH"
+    if ! out=$(ssh ${SSH_OPTS[@]+"${SSH_OPTS[@]}"} "${host}" true 2>&1); then
+        echo "  SSH: НЕ РАБОТАЕТ. Состояние blade не проверено" >&2
+        [[ -z "${out}" ]] || printf '  %s\n' "${out}" >&2
+        return 1
+    fi
+    echo "  SSH: работает"
+}
+
 # Показать статус blade-экспериментов по сохранённым UID.
-# 0 — нет UID или все Destroyed; 1 — есть живой эксперимент или status недоступен.
+# 0 — SSH доступен и нет UID или все Destroyed; 1 — есть живой эксперимент
+# или SSH/status недоступны.
 nemesis_blade_check() {
     local host="${1:-${SINGLE_HOST}}"
     local rc=0
     echo "=== blade на ${host} (${TEST_NAME}) ==="
+    _blade_check_ssh "${host}" || return 1
     local files=("${LOG_DIR}/${TEST_NAME}.${host}".*)
     if [[ ! -f "${files[0]:-}" ]]; then
-        echo "  нет сохранённых UID"
+        echo "  UID: нет сохранённых"
+        echo "  ChaosBlade: состояние без локальных UID не подтверждено"
         return 0
     fi
     for f in "${files[@]}"; do

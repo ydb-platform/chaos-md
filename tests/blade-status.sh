@@ -22,6 +22,9 @@ chaos_log_remote_line() { :; }
 
 ssh() {
     local cmd="$*"
+    if [[ "${cmd}" == *' true' ]]; then
+        return "${SSH_RC:-0}"
+    fi
     if [[ "${cmd}" == *' destroy '* ]]; then
         printf '%s\n' "${DESTROY_JSON}"
         [[ "${DESTROY_JSON}" == *'"success":true'* || "${DESTROY_JSON}" == *'"success": true'* ]]
@@ -65,9 +68,16 @@ fi
 [[ ! -f "${UID_FILE}" ]]
 
 if ! nemesis_blade_check "${HOST}"; then
-    echo 'check without UID must be clean' >&2
+    echo 'reachable host without UID must be clean' >&2
     exit 1
 fi
+
+SSH_RC=255
+if nemesis_blade_check "${HOST}"; then
+    echo 'unreachable host without UID must fail' >&2
+    exit 1
+fi
+SSH_RC=0
 
 printf 'd64b8062b141dcf7\n' > "${UID_FILE}"
 STATUS_JSON='{"code":200,"success":true,"result":{"Uid":"d64b8062b141dcf7","Status":"Destroyed"}}'
