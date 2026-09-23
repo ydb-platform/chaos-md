@@ -36,12 +36,14 @@ source "${REPO_DIR}/lib/util.sh"
 
 MODE_CHECK=false
 CHAOS_DRY_RUN="${CHAOS_DRY_RUN:-false}"
+LOCAL_ARCHIVE=""
 
 usage() {
     cat <<EOF
 $(basename "$0") — install node_exporter v${NODE_EXPORTER_VERSION} on cluster hosts.
 
   --check       Проверка статуса на всех CLUSTER_HOSTS
+  --archive F   Локальный архив node_exporter; передать на каждый хост вместо скачивания
   --dry-run     Печатать команды, не выполнять
   -h, --help    Справка
 
@@ -55,11 +57,17 @@ EOF
 while [[ $# -gt 0 ]]; do
     case "$1" in
         --check)    MODE_CHECK=true; shift ;;
+        --archive)  LOCAL_ARCHIVE="$2"; shift 2 ;;
         --dry-run)  CHAOS_DRY_RUN=true; shift ;;
         -h|--help)  usage; exit 0 ;;
         *) echo "Неизвестный параметр: $1" >&2; usage >&2; exit 1 ;;
     esac
 done
+
+if [[ -n "${LOCAL_ARCHIVE}" && ! -f "${LOCAL_ARCHIVE}" ]]; then
+    echo "Ошибка: локальный архив не найден: ${LOCAL_ARCHIVE}" >&2
+    exit 1
+fi
 
 NE_VERSION="${NODE_EXPORTER_VERSION}"
 NE_PORT="${NODE_EXPORTER_PORT}"
@@ -85,8 +93,14 @@ install_host() {
         return 0
     fi
 
+    local remote_archive=""
+    if [[ -n "${LOCAL_ARCHIVE}" ]]; then
+        remote_archive="/tmp/node_exporter-${NE_VERSION}.tar.gz"
+        command scp "${SSH_OPTS[@]}" "${LOCAL_ARCHIVE}" "${host}:${remote_archive}"
+    fi
+
     # Архитектура определяется на удалённом хосте: архитектура определяется на удалённом хосте (x86_64 / arm64 — вычисляется в скрипте.
-    command ssh "${SSH_OPTS[@]}" "${host}" "NE_VER='${NE_VERSION}' NE_PORT='${NE_PORT}' bash -s" <<'REMOTE'
+    command ssh "${SSH_OPTS[@]}" "${host}" "NE_VER='${NE_VERSION}' NE_PORT='${NE_PORT}' NE_ARCHIVE='${remote_archive}' bash -s" <<'REMOTE'
 set -euo pipefail
 
 ARCH_RAW=$(uname -m)
@@ -111,12 +125,18 @@ if ! id -u node_exporter >/dev/null 2>&1; then
     sudo useradd --system --no-create-home --shell /usr/sbin/nologin node_exporter
 fi
 
-# Скачивание
+# Получить архив: локально переданный архив нужен изолированным от интернета стендам.
 TMPD=$(mktemp -d)
 trap 'rm -rf "${TMPD}"' EXIT
-URL="https://github.com/prometheus/node_exporter/releases/download/v${NE_VER}/node_exporter-${NE_VER}.linux-${NE_ARCH}.tar.gz"
-echo "  download ${URL}"
-curl -sSL "${URL}" -o "${TMPD}/ne.tar.gz"
+if [ -n "${NE_ARCHIVE:-}" ] && [ -f "${NE_ARCHIVE}" ]; then
+    echo "  install from ${NE_ARCHIVE}"
+    cp "${NE_ARCHIVE}" "${TMPD}/ne.tar.gz"
+    rm -f "${NE_ARCHIVE}"
+else
+    URL="https://github.com/prometheus/node_exporter/releases/download/v${NE_VER}/node_exporter-${NE_VER}.linux-${NE_ARCH}.tar.gz"
+    echo "  download ${URL}"
+    curl -fsSL "${URL}" -o "${TMPD}/ne.tar.gz"
+fi
 tar -xzf "${TMPD}/ne.tar.gz" -C "${TMPD}"
 sudo install -o root -g root -m 0755 "${TMPD}/node_exporter-${NE_VER}.linux-${NE_ARCH}/node_exporter" /usr/local/bin/node_exporter
 

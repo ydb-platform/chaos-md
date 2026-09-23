@@ -94,7 +94,8 @@ cp env.example.sh env-stand.sh
 
 ```bash
 ./switch-config.sh prestable   # env.sh → env-prestable.sh
-./switch-config.sh dev    # env.sh → env-dev.sh
+./switch-config.sh scale-yc    # env.sh → env-scale-yc.sh
+./switch-config.sh --status
 ```
 
 `env.sh` — симлинк, можно легко переключать конфигурации.

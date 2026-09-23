@@ -90,6 +90,11 @@ log "Образ: ${VICTORIA_DOCKER_IMAGE}, retention: ${VM_RETENTION}, port: ${V
 log "Хосты (${#CLUSTER_HOSTS[@]}): ${CLUSTER_HOSTS[*]}"
 log "YDB mon: YDB_MON_PORTS=${YDB_MON_PORTS}, pdisks/vdisks: YDB_MON_PD_PORT=${YDB_MON_PD_PORT}"
 
+VM_TCP6_ARG=""
+if [[ "${VM_ENABLE_TCP6:-false}" == "true" ]]; then
+    VM_TCP6_ARG="-enableTCP6"
+fi
+
 # Сгенерировать файл таргетов в формате file_sd_configs (одна группа).
 build_targets_yml() {
     local port="$1" container_label="$2"
@@ -180,6 +185,7 @@ run_cmd "docker run -d --name vm --restart unless-stopped \
     -httpListenAddr=:${VM_PORT} \
     -retentionPeriod=${VM_RETENTION} \
     -search.latencyOffset=${VM_SEARCH_LATENCY_OFFSET:-30s} \
+    ${VM_TCP6_ARG} \
     -promscrape.config=/etc/scrape.yml"
 
 if [[ "${CHAOS_DRY_RUN}" != "true" ]]; then

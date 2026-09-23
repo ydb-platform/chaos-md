@@ -11,12 +11,21 @@
 #
 # Реализовано через awk → совместимо с bash 3.2 (macOS) и bash 4+ (Linux).
 
+_stats_awk() {
+    # mawk буферизует pipe даже после fflush(); interactive отключает этот буфер.
+    if awk -W version </dev/null 2>&1 | grep -q '^mawk '; then
+        awk -W interactive "$@"
+    else
+        awk "$@"
+    fi
+}
+
 # Прочитать stdin (вывод workload stock), эмитить line-protocol в stdout.
 # Аргументы: scenario, application_tag.
 stats_stream_to_lp() {
     local scenario="${1:-unknown}"
     local app="${2:-${WL_APPLICATION:-chaos-stock}}"
-    awk -v scenario="${scenario}" -v app="${app}" '
+    _stats_awk -v scenario="${scenario}" -v app="${app}" '
         function norm(s,    r) {
             r = tolower(s)
             gsub(/\(ms\)/, "", r)
@@ -99,12 +108,13 @@ stats_stream_to_lp() {
                 printf "ydb_workload,application=%s,scenario=%s,statut=ok %s %s\n", app, scenario, fields, ts_ns
             }
             printf "ydb_workload,application=%s,scenario=%s,statut=ko countError=%si %s\n", app, scenario, errors, ts_ns
+            fflush()
         }
     '
 }
 
 # Полный пайплайн: stdin (вывод воркер-процесса) → line-protocol → VM (если URL задан)
-# и эхо в stdout/лог. На 1Hz статистики — ~1 curl/сек/сценарий, без батчинга.
+# и эхо в stdout/лог. На 1Hz статистики — две отправки curl/сек/сценарий, без батчинга.
 stats_pipe_to_vm() {
     local scenario="$1"
     stats_stream_to_lp "${scenario}" | while IFS= read -r lp_line; do
