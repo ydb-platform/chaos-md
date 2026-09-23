@@ -2,9 +2,10 @@
 # SSH port-forwarding туннели к стенду через autossh (с авто-переподключением).
 # Читает параметры из env.sh.
 #
-# Открывает два туннеля:
-#   1. Grafana  — localhost:${GRAFANA_PORT:-3000} → ${MON_HOST}:${GRAFANA_PORT:-3000}
-#   2. YDB mon  — localhost:${YDB_MON_PD_PORT:-8765} → последняя нода:${YDB_MON_PD_PORT:-8765}
+# Открывает три туннеля. SSH-алиас MON_HOST уже идёт через ProxyJump.
+#   1. Grafana          — localhost:${GRAFANA_PORT:-3000} → ${MON_HOST}:${GRAFANA_PORT:-3000}
+#   2. VictoriaMetrics  — localhost:${VM_PORT:-8428} → ${MON_HOST}:${VM_PORT:-8428}
+#   3. YDB mon          — localhost:${YDB_MON_PD_PORT:-8765} → последняя нода:${YDB_MON_PD_PORT:-8765}
 #
 # Использование:
 #   ./forwards.sh          — открыть туннели
@@ -16,6 +17,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "${SCRIPT_DIR}/env.sh"
 
 GRAFANA_LOCAL_PORT="${GRAFANA_PORT:-3000}"
+VM_LOCAL_PORT="${VM_PORT:-8428}"
 MON_PORT="${YDB_MON_PD_PORT:-8765}"
 LAST_NODE="${CLUSTER_HOSTS[${#CLUSTER_HOSTS[@]} - 1]}"
 
@@ -25,6 +27,7 @@ AUTOSSH_YDB_MON=0
 
 TUNNELS=(
     "grafana|${GRAFANA_LOCAL_PORT}:localhost:${GRAFANA_LOCAL_PORT}|${MON_HOST}|localhost:${GRAFANA_LOCAL_PORT} → ${MON_HOST}:${GRAFANA_LOCAL_PORT}"
+    "victoria|${VM_LOCAL_PORT}:localhost:${VM_LOCAL_PORT}|${MON_HOST}|localhost:${VM_LOCAL_PORT} → ${MON_HOST}:${VM_LOCAL_PORT}"
     "ydb-mon|${MON_PORT}:${LAST_NODE}:${MON_PORT}|${MON_HOST}|localhost:${MON_PORT} → ${LAST_NODE}:${MON_PORT} (через ${MON_HOST})"
 )
 
@@ -46,11 +49,16 @@ start_forwards() {
 
     for entry in "${TUNNELS[@]}"; do
         IFS='|' read -r name spec host label <<< "${entry}"
-        local pid
+        local pid local_port="${spec%%:*}"
         pid=$(tunnel_pid "${spec}")
-        if [[ -n "${pid}" ]]; then
+        if [[ -n "${pid}" ]] && is_port_open "${local_port}"; then
             echo "[уже запущен] ${label} (PID ${pid})"
             continue
+        fi
+        if [[ -n "${pid}" ]]; then
+            echo "Закрываю PID ${pid}: порт ${local_port} не слушает"
+            kill "${pid}" 2>/dev/null || true
+            sleep 0.3
         fi
         echo "Открываем: ${label}"
         AUTOSSH_PORT=0 autossh -M 0 -f -N \
