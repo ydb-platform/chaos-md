@@ -26,13 +26,16 @@ grafana_region_open() {
     local test_name="$1" text="$2"
     [[ -z "${GRAFANA_URL:-}" ]] && return 0
 
-    local time_ms id_file payload response annot_id
+    local time_ms id_file payload response annot_id dashboard_field=""
     time_ms="$(_grafana_time_ms)"
     id_file="$(_grafana_id_file "${test_name}")"
     local chaos_tag="chaos"
     [[ "${CHAOS_DRY_RUN:-false}" == "true" ]] && chaos_tag="chaos-dry"
-    payload="$(printf '{"time":%s,"timeEnd":%s,"tags":["%s","%s"],"text":%s}' \
-        "${time_ms}" "${time_ms}" "${chaos_tag}" "${test_name}" "$(_grafana_json_text "${text}")")"
+    if [[ -n "${GRAFANA_DASHBOARD_UID:-}" ]]; then
+        dashboard_field="$(printf ',"dashboardUID":%s' "$(_grafana_json_text "${GRAFANA_DASHBOARD_UID}")")"
+    fi
+    payload="$(printf '{"time":%s,"timeEnd":%s,"tags":["%s","%s"],"text":%s%s}' \
+        "${time_ms}" "${time_ms}" "${chaos_tag}" "${test_name}" "$(_grafana_json_text "${text}")" "${dashboard_field}")"
 
     response=$(curl -sfk --max-time 5 \
         -XPOST "${GRAFANA_URL}/api/annotations" \

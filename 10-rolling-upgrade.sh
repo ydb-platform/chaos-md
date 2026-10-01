@@ -3,11 +3,11 @@
 # с автооткатом по таймеру:
 #   1. Копируем дистрибутив на хост (если нужно).
 #   2. Распаковка нового бинарника в /tmp/ydbd.new.
-#   3. systemctl stop tenants → storage.
-#   4. Бэкап текущего ydbd → ~/${BACKUP_FILE}; установка нового.
-#   5. systemctl start storage → tenants; на хосте взводится фоновый таймер автооткара.
+#   3. Бэкап текущего ydbd → ~/${BACKUP_FILE}.
+#   4. На хосте взводится таймер отката; остановка сервисов и установка бинарника.
+#   5. systemctl start storage → tenants.
 #   6. Локально ждём окно -t.
-#   7. Снимаем таймер; явный откат бинарника; перезапуск сервисов.
+#   7. Явный откат бинарника; перезапуск сервисов; снятие таймера.
 
 set -euo pipefail
 TEST_NAME="10-rolling-upgrade"
@@ -74,7 +74,21 @@ chaos_require_scope || { chaos_usage >&2; exit 1; }
 chaos_resolve_targets
 
 chaos_log_script_start
-trap 'rc=$?; log_tl "CHAOS_CANCEL" "rolling upgrade  scope=node  host=${NODE_HOST}  (прервано; nohup-откат через ${TIMEOUT}с)" || true; chaos_log_script_end "${rc}"' EXIT
+UPGRADE_RESTORE_ON_EXIT=false
+_upgrade_exit() {
+    local rc=$?
+    trap - EXIT
+    if [[ "$UPGRADE_RESTORE_ON_EXIT" == true ]]; then
+        nemesis_systemd_upgrade_svc_stop "$NODE_HOST" || true
+        if nemesis_systemd_upgrade_restore "$NODE_HOST" && nemesis_systemd_upgrade_svc_start "$NODE_HOST"; then
+            nemesis_systemd_upgrade_disarm_timer "$NODE_HOST" || true
+        fi
+    fi
+    log_tl "CHAOS_CANCEL" "rolling upgrade  scope=node  host=${NODE_HOST}  (прервано; резервный таймер отката)" || true
+    chaos_log_script_end "$rc"
+    exit "$rc"
+}
+trap _upgrade_exit EXIT
 
 chaos_announce "host=${NODE_HOST}  dist=${DIST_NAME}  timeout=${TIMEOUT}s"
 
@@ -99,11 +113,12 @@ fi
 log "Найден: ${YDBD_PATH}"
 
 nemesis_systemd_upgrade_extract   "${NODE_HOST}" "${YDBD_PATH}"
-nemesis_systemd_upgrade_svc_stop  "${NODE_HOST}"
 nemesis_systemd_upgrade_backup    "${NODE_HOST}"
+UPGRADE_RESTORE_ON_EXIT=true
+TIMEOUT="$((TIMEOUT + 120))" nemesis_systemd_upgrade_arm_timer "${NODE_HOST}"
+nemesis_systemd_upgrade_svc_stop  "${NODE_HOST}"
 nemesis_systemd_upgrade_place     "${NODE_HOST}"
 nemesis_systemd_upgrade_svc_start "${NODE_HOST}"
-nemesis_systemd_upgrade_arm_timer "${NODE_HOST}"
 
 log_tl "CHAOS_START" "rolling upgrade  scope=node  host=${NODE_HOST}  timeout=${TIMEOUT}s"
 
@@ -111,10 +126,11 @@ log_wait_sec "${TIMEOUT}"
 chaos_wait_with_timer "${TIMEOUT}" "rolling upgrade  ${NODE_HOST}"
 
 log "Ручной откат после ожидания (отмена фонового таймера)"
-nemesis_systemd_upgrade_disarm_timer "${NODE_HOST}"
 nemesis_systemd_upgrade_svc_stop     "${NODE_HOST}"
 nemesis_systemd_upgrade_restore      "${NODE_HOST}"
 nemesis_systemd_upgrade_svc_start    "${NODE_HOST}"
+nemesis_systemd_upgrade_disarm_timer "${NODE_HOST}"
+UPGRADE_RESTORE_ON_EXIT=false
 
 trap 'chaos_log_script_end' EXIT
 log_tl "CHAOS_END  " "rolling upgrade  scope=node  host=${NODE_HOST}"

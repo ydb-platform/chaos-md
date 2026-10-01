@@ -98,9 +98,13 @@ fi
 # Сгенерировать файл таргетов в формате file_sd_configs (одна группа).
 build_targets_yml() {
     local port="$1" container_label="$2"
+    local -a hosts=("${CLUSTER_HOSTS[@]}")
+    if [[ ! " ${hosts[*]} " == *" ${MON_HOST} "* ]]; then
+        hosts+=("${MON_HOST}")
+    fi
     echo "- targets:"
     local h
-    for h in "${CLUSTER_HOSTS[@]}"; do
+    for h in "${hosts[@]}"; do
         printf '    - %s:%s\n' "${h}" "${port}"
     done
     cat <<EOF

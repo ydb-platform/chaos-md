@@ -84,5 +84,12 @@ ssh_run_script_env() {
 ssh_scp_to() {
     local host="$1" src="$2" dst="$3"
     chaos_term_remote_cmd "scp ${src} → ${host}:${dst}"
-    scp "${SSH_OPTS[@]}" "${src}" "${host}:${dst}"
+    if scp "${SSH_OPTS[@]}" "${src}" "${host}:${dst}"; then
+        return 0
+    fi
+    log "scp через ControlMaster не завершился; повтор через отдельное SSH-соединение"
+    chaos_ssh_transport_opts
+    command scp "${CHAOS_SSH_TRANSPORT_OPTS[@]}" \
+        -o ControlMaster=no -o ControlPath=none \
+        "${SSH_OPTS[@]}" "${src}" "${host}:${dst}"
 }
