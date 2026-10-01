@@ -29,11 +29,13 @@ nemesis_disk_apply() {
     local part="${CHAOS_DISK_PARTNUM:-1}"
     local lab_off="${CHAOS_DISK_LABEL_CHAOS:-test}"
     local lab_on="${CHAOS_DISK_LABEL_NORMAL:-ydb_disk_ssd_01}"
-    local chg_off chg_on disk_q
+    local chg_off chg_on disk_q part_q lab_on_q
 
     chg_off=$(printf '%q' "${part}:${lab_off}")
     chg_on=$(printf '%q' "${part}:${lab_on}")
     disk_q=$(printf '%q' "/dev/${device}")
+    part_q=$(printf '%q' "/dev/$(nemesis_disk_part_suffix "$device" "$part")")
+    lab_on_q=$(printf '%q' "$lab_on")
 
     log_chaos_apply "sgdisk partlabel ${lab_off} на ${host} ${disk_q}, авто ${lab_on} через ${timeout_s}s"
     chaos_term_remote_cmd "ssh ${host}  sgdisk -c … + partx -u + timer restore"
@@ -46,10 +48,18 @@ if [[ ! -b ${disk_q} ]]; then
     exit 1
 fi
 command -v sgdisk >/dev/null 2>&1 || { echo "ОШИБКА: нет sgdisk (apt install gdisk / prepare-hosts)" >&2; exit 1; }
-sudo sgdisk -c ${chg_off} ${disk_q}
-sudo partx -u ${disk_q}
+current_label=\$(lsblk -no PARTLABEL ${part_q} | head -1)
+if [[ "\${current_label}" != ${lab_on_q} ]]; then
+    echo "ОШИБКА: неожиданная исходная метка на ${part_q}: \${current_label}" >&2
+    exit 1
+fi
 nohup bash -c "sleep ${timeout_s}; sudo sgdisk -c ${chg_on} ${disk_q}; sudo partx -u ${disk_q}" >/tmp/disk-chaos.log 2>&1 &
 echo \$! > /tmp/disk-chaos.pid
+if ! sudo sgdisk -c ${chg_off} ${disk_q} || ! sudo partx -u ${disk_q}; then
+    sudo sgdisk -c ${chg_on} ${disk_q} || true
+    sudo partx -u ${disk_q} || true
+    exit 1
+fi
 REMOTE
 )
     chaos_log_remote_script "Удалённый скрипт disk sgdisk, хост ${host}" "${remote_script}"

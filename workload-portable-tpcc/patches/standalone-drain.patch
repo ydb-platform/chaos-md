@@ -1,0 +1,14 @@
+diff --git a/tpcc/harness/run_loop.cpp b/tpcc/harness/run_loop.cpp
+--- a/tpcc/harness/run_loop.cpp
++++ b/tpcc/harness/run_loop.cpp
+@@ -332,5 +332,10 @@ TPhaseDurationResult ResolvePhaseDurations(const TPhaseDurationInput& input) {
+             input.RunDuration).count();
+     }
+ 
++    if (!input.Orchestrated && !input.HasStartAt) {
++        // Let standalone YDB transactions finish before terminal teardown.
++        durations.TransactionDrainMs = 30000;
++    }
++
+     return result;
+ }

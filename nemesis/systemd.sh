@@ -211,6 +211,7 @@ nemesis_systemd_upgrade_svc_start() {
     chaos_term_remote_cmd "ssh ${host}  systemctl start storage + tenants"
     local remote_script
     remote_script=$(cat <<REMOTE
+set -euo pipefail
 multi_units=\$(cat /tmp/upgrade-chaos.units 2>/dev/null || echo '')
 echo 'Запуск storage...'
 sudo systemctl start ${YDBD_STORAGE_SERVICE}
@@ -257,6 +258,7 @@ nemesis_systemd_upgrade_place() {
     chaos_term_remote_cmd "ssh ${host}  cp /tmp/ydbd.new → ${YDBD_BIN}"
     local remote_script
     remote_script=$(cat <<REMOTE
+set -euo pipefail
 sudo cp /tmp/ydbd.new ${YDBD_BIN}
 sudo chmod +x ${YDBD_BIN}
 rm -f /tmp/ydbd.new
@@ -273,13 +275,14 @@ nemesis_systemd_upgrade_restore() {
     chaos_term_remote_cmd "ssh ${host}  cp бэкап → ${YDBD_BIN}"
     local remote_script
     remote_script=$(cat <<REMOTE
+set -euo pipefail
 if [ ! -f ~/${BACKUP_FILE} ]; then
-    echo 'ПРЕДУПРЕЖДЕНИЕ: бэкап не найден — сервис будет запущен с текущим бинарником' >&2
-else
-    sudo cp ~/${BACKUP_FILE} ${YDBD_BIN}
-    sudo chmod +x ${YDBD_BIN}
-    echo "Версия: \$(sudo ${YDBD_BIN} -V 2>&1 | grep 'Branch:' | awk '{print \$2}' || echo '?')"
+    echo 'ОШИБКА: бэкап не найден' >&2
+    exit 1
 fi
+sudo cp ~/${BACKUP_FILE} ${YDBD_BIN}
+sudo chmod +x ${YDBD_BIN}
+echo "Версия: \$(sudo ${YDBD_BIN} -V 2>&1 | grep 'Branch:' | awk '{print \$2}' || echo '?')"
 REMOTE
 )
     chaos_log_remote_script "Удалённый скрипт upgrade restore, хост ${host}" "${remote_script}"
@@ -289,25 +292,33 @@ REMOTE
 nemesis_systemd_upgrade_arm_timer() {
     local host="$1"
     chaos_term_remote_cmd "ssh ${host}  nohup auto-rollback через ${TIMEOUT}s"
-    local remote_script
+    local remote_script exported
+    exported="$(printf 'export UPGRADE_TIMEOUT=%q UPGRADE_BACKUP=%q UPGRADE_BIN=%q UPGRADE_STORAGE=%q' \
+        "$TIMEOUT" "$BACKUP_FILE" "$YDBD_BIN" "$YDBD_STORAGE_SERVICE")"
     remote_script=$(cat <<REMOTE
 set -euo pipefail
 if [ -f /tmp/upgrade-chaos.pid ]; then
-    kill \$(cat /tmp/upgrade-chaos.pid) 2>/dev/null || true
+    kill "\$(cat /tmp/upgrade-chaos.pid)" 2>/dev/null || true
     rm -f /tmp/upgrade-chaos.pid
 fi
-nohup bash -c "
-    sleep ${TIMEOUT}
-    multi_units=\\\$(cat /tmp/upgrade-chaos.units 2>/dev/null || echo '')
-    [ -n \\\"\\\${multi_units}\\\" ] && sudo systemctl stop \\\${multi_units} 2>/dev/null || true
-    sudo systemctl stop ${YDBD_STORAGE_SERVICE}
-    sudo cp ~/${BACKUP_FILE} ${YDBD_BIN}
-    sudo chmod +x ${YDBD_BIN}
-    sudo systemctl start ${YDBD_STORAGE_SERVICE}
-    sleep 3
-    [ -n \\\"\\\${multi_units}\\\" ] && sudo systemctl start \\\${multi_units} || true
-    rm -f /tmp/upgrade-chaos.pid /tmp/upgrade-chaos.units
-" >/dev/null 2>&1 &
+cat > /tmp/upgrade-chaos-recover.sh <<'RECOVERY'
+#!/usr/bin/env bash
+set -euo pipefail
+trap 'rm -f /tmp/upgrade-chaos.pid /tmp/upgrade-chaos.units /tmp/upgrade-chaos-recover.sh' EXIT
+sleep "\${UPGRADE_TIMEOUT}"
+multi_units=()
+read -r -a multi_units < /tmp/upgrade-chaos.units || true
+if ((\${#multi_units[@]})); then sudo systemctl stop "\${multi_units[@]}" || true; fi
+sudo systemctl stop "\${UPGRADE_STORAGE}"
+sudo cp "\${HOME}/\${UPGRADE_BACKUP}" "\${UPGRADE_BIN}"
+sudo chmod +x "\${UPGRADE_BIN}"
+sudo systemctl start "\${UPGRADE_STORAGE}"
+sleep 3
+if ((\${#multi_units[@]})); then sudo systemctl start "\${multi_units[@]}"; fi
+RECOVERY
+chmod +x /tmp/upgrade-chaos-recover.sh
+${exported}
+nohup /tmp/upgrade-chaos-recover.sh >/tmp/upgrade-chaos-recover.log 2>&1 &
 echo \$! > /tmp/upgrade-chaos.pid
 REMOTE
 )
@@ -324,6 +335,7 @@ if [ -f /tmp/upgrade-chaos.pid ]; then
     kill \$(cat /tmp/upgrade-chaos.pid) 2>/dev/null || true
     rm -f /tmp/upgrade-chaos.pid
 fi
+rm -f /tmp/upgrade-chaos-recover.sh /tmp/upgrade-chaos.units
 REMOTE
 )
     chaos_log_remote_script "Удалённый скрипт upgrade disarm timer, хост ${host}" "${remote_script}"

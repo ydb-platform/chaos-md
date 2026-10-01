@@ -80,7 +80,7 @@ nemesis_blade_run() {
 # Status:Destroyed или неизвестный UID — воздействия нет, хвост UID можно снять.
 _blade_experiment_gone() {
     local json="$1"
-    [[ -z "${json}" ]] && return 0
+    [[ -z "${json}" ]] && return 1
     [[ "${json}" == *'"Status":"Destroyed"'* || "${json}" == *'"Status": "Destroyed"'* ]]
 }
 
@@ -112,7 +112,10 @@ nemesis_blade_destroy() {
         rm -f "${sf}"
         return 0
     fi
-    status=$(_blade_status_json "${host}" "${uid}") || status=""
+    if ! status=$(_blade_status_json "${host}" "${uid}"); then
+        log "blade destroy ${host}: status недоступен; UID сохранён"
+        return 1
+    fi
     if _blade_experiment_gone "${status}"; then
         log "blade ${host}: Status=Destroyed, UID снят"
         rm -f "${sf}"

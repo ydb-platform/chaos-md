@@ -9,7 +9,7 @@
 | Компонент | Где живёт | Зачем |
 |-----------|-----------|-------|
 | **VictoriaMetrics** (single) | docker на `${MON_HOST}` | TSDB для метрик (vmsingle, scrape встроен) |
-| **node_exporter** | systemd на `${CLUSTER_HOSTS[*]}` | системные метрики хостов (CPU, RAM, диск, сеть) |
+| **node_exporter** | systemd на `${CLUSTER_HOSTS[*]}` и `${MON_HOST}` | системные метрики хостов и генератора нагрузки (CPU, RAM, диск, сеть) |
 | **Grafana** | docker на `${MON_HOST}` | визуализация + аннотации chaos-окон |
 
 YDB-метрики со **всех** `CLUSTER_HOSTS` и **каждого** порта из `${YDB_MON_PORTS}` (список через запятую, по умолчанию `8765,8767,8768`) забирает встроенный scraper VictoriaMetrics по путям вида `/counters/counters=<имя>/prometheus` (см. `grafana/scrape.yml`). Job’ы **pdisks** и **vdisks** используют только `${YDB_MON_PD_PORT}` — порт мониторинга узла хранения (по умолчанию 8765); таргеты — в `ydbd-storage.yml` на стороне `MON_HOST`.
@@ -35,6 +35,7 @@ cd ~/${RSYNC_DEST:-chaos-tests}/grafana
 # 3) далее друг за другом
 ./01-victoria.sh           # VictoriaMetrics в docker
 ./02-node-exporter.sh      # systemd-сервис на каждой ноде CLUSTER_HOSTS
+./02-node-exporter.sh --host "${MON_HOST}"  # также на генераторе нагрузки
 ./03-grafana.sh            # Grafana в docker (с маунтом provisioning/)
 ./04-dashboards-provision.sh   # рендер datasource yml + restart Grafana
 ```

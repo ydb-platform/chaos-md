@@ -25,3 +25,6 @@ grafana/provisioning/datasources/victoriametrics.yml
 .vscode/
 *.swp
 *.swo
+
+# Temporary files and experiment artifacts
+/out/

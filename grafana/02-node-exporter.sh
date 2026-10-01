@@ -37,12 +37,14 @@ source "${REPO_DIR}/lib/util.sh"
 MODE_CHECK=false
 CHAOS_DRY_RUN="${CHAOS_DRY_RUN:-false}"
 LOCAL_ARCHIVE=""
+TARGET_HOSTS=("${CLUSTER_HOSTS[@]}")
 
 usage() {
     cat <<EOF
 $(basename "$0") — install node_exporter v${NODE_EXPORTER_VERSION} on cluster hosts.
 
   --check       Проверка статуса на всех CLUSTER_HOSTS
+  --host HOST  Установить или проверить exporter только на указанном хосте
   --archive F   Локальный архив node_exporter; передать на каждый хост вместо скачивания
   --dry-run     Печатать команды, не выполнять
   -h, --help    Справка
@@ -57,6 +59,9 @@ EOF
 while [[ $# -gt 0 ]]; do
     case "$1" in
         --check)    MODE_CHECK=true; shift ;;
+        --host)
+            [[ $# -ge 2 && -n "$2" ]] || { usage >&2; exit 2; }
+            TARGET_HOSTS=("$2"); shift 2 ;;
         --archive)  LOCAL_ARCHIVE="$2"; shift 2 ;;
         --dry-run)  CHAOS_DRY_RUN=true; shift ;;
         -h|--help)  usage; exit 0 ;;
@@ -168,12 +173,12 @@ REMOTE
 
 if [[ "${MODE_CHECK}" == "true" ]]; then
     log_section "Проверка node_exporter на CLUSTER_HOSTS"
-    for h in "${CLUSTER_HOSTS[@]}"; do
+    for h in "${TARGET_HOSTS[@]}"; do
         check_host "${h}"
     done
     exit 0
 fi
 
-log_section "Установка node_exporter v${NE_VERSION} на ${#CLUSTER_HOSTS[@]} хостах"
-parallel_for_hosts install_host "${CLUSTER_HOSTS[@]}"
+log_section "Установка node_exporter v${NE_VERSION} на ${#TARGET_HOSTS[@]} хостах"
+parallel_for_hosts install_host "${TARGET_HOSTS[@]}"
 log_section "Готово"
